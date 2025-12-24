@@ -5,18 +5,41 @@ import '../models/sync_file.dart';
 class FileService {
   late Directory _syncDirectory;
   bool _initialized = false;
+  String? _customPath;
 
-  Future<void> initialize() async {
-    if (_initialized) return;
+  Future<void> initialize({String? customPath}) async {
+    _customPath = customPath;
+    await _initDirectory();
+  }
 
-    final appDir = await getApplicationDocumentsDirectory();
-    _syncDirectory = Directory('${appDir.path}/OwlTransfer');
+  Future<void> _initDirectory() async {
+    String basePath;
+
+    if (_customPath != null && _customPath!.isNotEmpty) {
+      // Use custom path from settings
+      basePath = _customPath!;
+    } else {
+      // Default fallback
+      final appDir = await getApplicationDocumentsDirectory();
+      basePath = '${appDir.path}/OwlTransfer';
+    }
+
+    _syncDirectory = Directory(basePath);
 
     if (!await _syncDirectory.exists()) {
       await _syncDirectory.create(recursive: true);
     }
 
     _initialized = true;
+  }
+
+  Future<void> changeSyncFolder(String newPath) async {
+    _customPath = newPath;
+    _syncDirectory = Directory(newPath);
+
+    if (!await _syncDirectory.exists()) {
+      await _syncDirectory.create(recursive: true);
+    }
   }
 
   String get syncPath => _syncDirectory.path;

@@ -89,9 +89,12 @@ class _AppInitializerState extends State<AppInitializer> {
         await _settingsService.setDeviceName(deviceName);
       }
 
-      // Initialize file service
+      // Get saved sync folder path
+      final syncFolderPath = await _settingsService.getSyncFolderPath();
+
+      // Initialize file service with custom path if set
       _fileService = FileService();
-      await _fileService.initialize();
+      await _fileService.initialize(customPath: syncFolderPath);
 
       // Initialize P2P service
       _p2pService = P2PService();

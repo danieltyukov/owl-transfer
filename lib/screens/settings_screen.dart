@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import '../models/device.dart';
 import '../services/settings_service.dart';
 import '../services/sync_service.dart';
 import '../services/p2p_service.dart';
+import '../services/file_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   final SettingsService settingsService;
   final SyncService syncService;
   final P2PService p2pService;
+  final FileService fileService;
 
   const SettingsScreen({
     super.key,
     required this.settingsService,
     required this.syncService,
     required this.p2pService,
+    required this.fileService,
   });
 
   @override
@@ -24,6 +28,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _deviceName = '';
   int _syncInterval = 10;
   bool _autoSync = true;
+  String _syncFolderPath = '';
   List<PairedDevice> _pairedDevices = [];
   bool _isLoading = true;
 
@@ -39,6 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final deviceName = await widget.settingsService.getDeviceName();
     final syncInterval = await widget.settingsService.getSyncInterval();
     final autoSync = await widget.settingsService.getAutoSync();
+    final syncFolderPath = await widget.settingsService.getSyncFolderPath();
     final pairedDevices = await widget.settingsService.getPairedDevices();
 
     // Check online status
@@ -50,6 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _deviceName = deviceName;
       _syncInterval = syncInterval;
       _autoSync = autoSync;
+      _syncFolderPath = syncFolderPath ?? widget.fileService.syncPath;
       _pairedDevices = pairedDevices;
       _isLoading = false;
     });
@@ -102,6 +109,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.syncService.stopAutoSync();
     }
     setState(() => _autoSync = enabled);
+  }
+
+  Future<void> _changeSyncFolder() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: 'Select Sync Folder',
+    );
+
+    if (result != null) {
+      await widget.settingsService.setSyncFolderPath(result);
+      await widget.fileService.changeSyncFolder(result);
+      setState(() => _syncFolderPath = result);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Sync folder changed to: $result'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _removePairedDevice(PairedDevice device) async {
@@ -158,6 +186,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             leading: const Icon(Icons.wifi),
             title: const Text('IP Address'),
             subtitle: Text(widget.p2pService.localIp ?? 'Not available'),
+          ),
+
+          const Divider(),
+
+          // Storage Section
+          _SectionHeader(title: 'Storage'),
+          ListTile(
+            leading: const Icon(Icons.folder),
+            title: const Text('Sync Folder'),
+            subtitle: Text(
+              _syncFolderPath,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2,
+            ),
+            trailing: const Icon(Icons.edit),
+            onTap: _changeSyncFolder,
           ),
 
           const Divider(),

@@ -203,16 +203,21 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => SettingsScreen(
-                  settingsService: widget.settingsService,
-                  syncService: widget.syncService,
-                  p2pService: widget.p2pService,
+            onPressed: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => SettingsScreen(
+                    settingsService: widget.settingsService,
+                    syncService: widget.syncService,
+                    p2pService: widget.p2pService,
+                    fileService: widget.fileService,
+                  ),
                 ),
-              ),
-            ),
+              );
+              // Reload files in case sync folder changed
+              _loadFiles();
+            },
             tooltip: 'Settings',
           ),
         ],

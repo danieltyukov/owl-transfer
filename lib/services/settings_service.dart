@@ -8,6 +8,7 @@ class SettingsService {
   static const String _keySyncInterval = 'sync_interval';
   static const String _keyPairedDevices = 'paired_devices';
   static const String _keyAutoSync = 'auto_sync';
+  static const String _keySyncFolderPath = 'sync_folder_path';
 
   late SharedPreferences _prefs;
 
@@ -49,6 +50,15 @@ class SettingsService {
 
   Future<void> setAutoSync(bool enabled) async {
     await _prefs.setBool(_keyAutoSync, enabled);
+  }
+
+  // Sync Folder Path
+  Future<String?> getSyncFolderPath() async {
+    return _prefs.getString(_keySyncFolderPath);
+  }
+
+  Future<void> setSyncFolderPath(String path) async {
+    await _prefs.setString(_keySyncFolderPath, path);
   }
 
   // Paired Devices
