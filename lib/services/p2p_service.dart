@@ -45,6 +45,7 @@ class P2PService {
 
   ServerSocket? _server;
   final Map<String, Socket> _connections = {};
+  final Map<String, String> _socketToDeviceId = {}; // Maps socket address to device ID
   final _uuid = const Uuid();
 
   late String deviceId;
@@ -148,7 +149,9 @@ class P2PService {
             final filePath = parts[0];
             final base64Data = parts.sublist(1).join(':');
             final bytes = base64Decode(base64Data);
-            _fileDataController.add((remoteId, filePath, Uint8List.fromList(bytes)));
+            // Use actual device ID if available
+            final actualDeviceId = _socketToDeviceId[remoteId] ?? remoteId;
+            _fileDataController.add((actualDeviceId, filePath, Uint8List.fromList(bytes)));
           } else {
             final message = P2PMessage.fromJsonString(line);
             _handleMessage(remoteId, socket, message);
@@ -171,12 +174,14 @@ class P2PService {
       case MessageType.pairRequest:
         final code = message.data['pairingCode'];
         if (code == _pairingCode) {
-          _connections[message.data['deviceId']] = socket;
-          sendMessage(message.data['deviceId'], P2PMessage(
+          final peerDeviceId = message.data['deviceId'];
+          _connections[peerDeviceId] = socket;
+          _socketToDeviceId[remoteId] = peerDeviceId;
+          sendMessage(peerDeviceId, P2PMessage(
             type: MessageType.pairAccept,
             data: {'deviceId': deviceId, 'deviceName': deviceName},
           ));
-          _connectionController.add((message.data['deviceId'], true));
+          _connectionController.add((peerDeviceId, true));
         } else {
           sendMessageToSocket(socket, P2PMessage(
             type: MessageType.pairReject,
@@ -186,8 +191,10 @@ class P2PService {
         break;
 
       case MessageType.pairAccept:
-        _connections[message.data['deviceId']] = socket;
-        _connectionController.add((message.data['deviceId'], true));
+        final peerDeviceId = message.data['deviceId'];
+        _connections[peerDeviceId] = socket;
+        _socketToDeviceId[remoteId] = peerDeviceId;
+        _connectionController.add((peerDeviceId, true));
         break;
 
       case MessageType.ping:
@@ -198,12 +205,16 @@ class P2PService {
         break;
 
       default:
-        _messageController.add((remoteId, message));
+        // Use the actual device ID if we have it, otherwise fall back to socket address
+        final actualDeviceId = _socketToDeviceId[remoteId] ?? remoteId;
+        _messageController.add((actualDeviceId, message));
     }
   }
 
   void _removeConnection(String id) {
     _connections.remove(id);
+    // Also clean up the socket to device ID mapping
+    _socketToDeviceId.removeWhere((key, value) => value == id || key == id);
     _connectionController.add((id, false));
   }
 
@@ -222,6 +233,10 @@ class P2PService {
     try {
       final socket = await Socket.connect(info.ipAddress, info.port);
       _connections[info.deviceId] = socket;
+
+      // Store mapping from socket address to device ID
+      final socketAddr = '${socket.remoteAddress.address}:${socket.remotePort}';
+      _socketToDeviceId[socketAddr] = info.deviceId;
 
       StringBuffer buffer = StringBuffer();
       socket.listen(
