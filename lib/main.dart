@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'services/file_service.dart';
 import 'services/p2p_service.dart';
 import 'services/settings_service.dart';
@@ -73,6 +74,18 @@ class _AppInitializerState extends State<AppInitializer> {
 
   Future<void> _initialize() async {
     try {
+      // Request storage permissions on Android
+      if (Platform.isAndroid) {
+        // Request manage external storage for Android 11+
+        var status = await Permission.manageExternalStorage.status;
+        if (!status.isGranted) {
+          status = await Permission.manageExternalStorage.request();
+        }
+
+        // Also request basic storage permissions
+        await Permission.storage.request();
+      }
+
       // Initialize settings first
       _settingsService = SettingsService();
       await _settingsService.initialize();

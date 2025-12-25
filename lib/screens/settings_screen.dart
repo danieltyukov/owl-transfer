@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../models/device.dart';
 import '../services/settings_service.dart';
 import '../services/sync_service.dart';
@@ -203,6 +205,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             trailing: const Icon(Icons.edit),
             onTap: _changeSyncFolder,
           ),
+          if (Platform.isAndroid)
+            ListTile(
+              leading: const Icon(Icons.security),
+              title: const Text('Storage Permission'),
+              subtitle: const Text('Grant "All files access" for external storage'),
+              trailing: ElevatedButton(
+                onPressed: () async {
+                  await openAppSettings();
+                },
+                child: const Text('Grant'),
+              ),
+            ),
 
           const Divider(),
 

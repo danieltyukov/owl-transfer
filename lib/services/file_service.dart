@@ -45,7 +45,9 @@ class FileService {
   String get syncPath => _syncDirectory.path;
 
   Future<List<SyncFile>> listFiles({String? subPath}) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final targetDir = subPath != null
         ? Directory('${_syncDirectory.path}/$subPath')
@@ -76,7 +78,9 @@ class FileService {
   }
 
   Future<List<SyncFile>> listAllFilesRecursive() async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final List<SyncFile> files = [];
 
@@ -92,7 +96,9 @@ class FileService {
   }
 
   Future<void> createFolder(String name, {String? parentPath}) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final path = parentPath != null
         ? '${_syncDirectory.path}/$parentPath/$name'
@@ -105,7 +111,9 @@ class FileService {
   }
 
   Future<void> addFile(File sourceFile, {String? targetPath}) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final fileName = sourceFile.path.split(Platform.pathSeparator).last;
     final destPath = targetPath != null
@@ -116,7 +124,9 @@ class FileService {
   }
 
   Future<void> addFileFromBytes(String fileName, List<int> bytes, {String? targetPath}) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final destPath = targetPath != null
         ? '${_syncDirectory.path}/$targetPath/$fileName'
@@ -133,14 +143,18 @@ class FileService {
   }
 
   Future<List<int>> readFileBytes(String relativePath) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final file = File('${_syncDirectory.path}/$relativePath');
     return await file.readAsBytes();
   }
 
   Future<void> deleteFile(String relativePath) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final path = '${_syncDirectory.path}/$relativePath';
     final file = File(path);
@@ -154,7 +168,9 @@ class FileService {
   }
 
   Future<void> renameFile(String oldPath, String newName) async {
-    await initialize();
+    if (!_initialized) {
+      await _initDirectory();
+    }
 
     final oldFullPath = '${_syncDirectory.path}/$oldPath';
     final entity = FileSystemEntity.typeSync(oldFullPath);
