@@ -1,6 +1,6 @@
 import { useRef, type ComponentType } from 'react';
 
-import type { DirEntry } from '../../backend/types.js';
+import type { DirEntry, EntryStatus } from '../../backend/types.js';
 import { formatBytes, formatRelative } from '../../format.js';
 import {
   ArchiveGlyph,
@@ -37,6 +37,12 @@ export function glyphFor(entry: DirEntry): ComponentType {
 
 export interface FileRowProps {
   entry: DirEntry;
+  /**
+   * Where the file has got to, which the pane works out rather than the row:
+   * the listing's own status is as old as the listing, and a transfer in the
+   * state is as new as the last event.
+   */
+  status: EntryStatus;
   now: number;
   onOpen: (entry: DirEntry) => void;
   onMenu: (entry: DirEntry, at: { x: number; y: number }) => void;
@@ -58,7 +64,7 @@ const SLOP_PX = 6;
  * any movement past a few pixels, so a scroll that starts on a row is a scroll
  * and not a menu.
  */
-export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) {
+export function FileRow({ entry, status, now, onOpen, onMenu, expanded }: FileRowProps) {
   const Glyph = glyphFor(entry);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   /*
@@ -125,7 +131,7 @@ export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) 
           <Glyph />
         </span>
         <span className="row-name">{entry.name}</span>
-        <SyncBadge status={entry.status} />
+        <SyncBadge status={status} />
         <span className="row-size mono">{entry.isDir ? '' : formatBytes(entry.size)}</span>
         <span className="row-when">{formatRelative(entry.mtimeMs, now)}</span>
       </button>

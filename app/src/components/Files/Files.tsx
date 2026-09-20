@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { Backend, DirEntry, State } from '../../backend/types.js';
+import type {
+  Backend,
+  DirEntry,
+  EntryStatus,
+  State,
+  Transfer,
+} from '../../backend/types.js';
 import { FolderPlusGlyph, PlusGlyph } from '../../icons/glyphs.js';
 import { OwlMark } from '../../icons/OwlMark.js';
 import type { Pane } from '../../panes.js';
@@ -36,6 +42,34 @@ export function sortEntries(entries: readonly DirEntry[]): DirEntry[] {
 export function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(part => part !== '');
   return parts[parts.length - 1] ?? path;
+}
+
+/**
+ * How far each transfer in flight has got, by path.
+ *
+ * The badge cannot come from the listing alone. `listDir` answers with the
+ * status at the moment it was asked, and nothing asks again while bytes are
+ * moving: the engine only calls a directory stale when something in it
+ * changed, which during a download is once, at the end. The transfers in the
+ * state arrive ten times a second, so the rows take their syncing badge from
+ * those and the ring actually turns.
+ */
+export function movingNow(transfers: readonly Transfer[]): Map<string, number> {
+  const progress = new Map<string, number>();
+  for (const transfer of transfers) {
+    const done = transfer.bytesTotal === 0 ? 1 : transfer.bytesDone / transfer.bytesTotal;
+    progress.set(transfer.path, done);
+  }
+  return progress;
+}
+
+/** The badge for one row: what is moving now, else what the listing said. */
+export function statusFor(entry: DirEntry, moving: ReadonlyMap<string, number>): EntryStatus {
+  // A conflict copy stays a conflict copy whatever is in flight, which is the
+  // order the engine puts the two in as well.
+  if (entry.status.kind === 'conflict') return entry.status;
+  const progress = moving.get(entry.path);
+  return progress === undefined ? entry.status : { kind: 'syncing', progress };
 }
 
 /** A name a file can actually have, on every platform the app runs on. */
@@ -164,6 +198,7 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
   };
 
   const listing = entries ?? [];
+  const moving = movingNow(state.transfers.active);
   const here = dir === '' ? folderName(state.folder) : dir.slice(dir.lastIndexOf('/') + 1);
 
   return (
@@ -209,6 +244,7 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
                 <FileRow
                   key={entry.path}
                   entry={entry}
+                  status={statusFor(entry, moving)}
                   now={now}
                   onOpen={open}
                   onMenu={(target, at) => setMenu({ entry: target, at })}

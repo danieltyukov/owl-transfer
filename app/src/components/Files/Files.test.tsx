@@ -89,6 +89,75 @@ describe('the files pane', () => {
     );
   });
 
+  it('follows a transfer from the state, which is the only thing that moves', async () => {
+    // The listing carries the status it had when it was asked for, and the
+    // engine only calls a directory stale once the file has landed. Without
+    // the state feeding the badge, the ring would never turn.
+    const backend = createMockBackend();
+    render(<App backend={backend} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    const listings = vi.spyOn(backend, 'listDir');
+    const moving = (bytesDone: number) => ({
+      active: [
+        {
+          path: 'readme.txt',
+          peerId: 'peer',
+          direction: 'download' as const,
+          bytesDone,
+          bytesTotal: 1_204,
+        },
+      ],
+      queued: 0,
+      bytesPerSec: 1_000,
+    });
+
+    act(() => {
+      backend.emitState({ transfers: moving(602) });
+    });
+    expect(screen.getByRole('button', { name: /^readme\.txt/ })).toHaveAccessibleName(
+      /Syncing, 50 percent/,
+    );
+
+    act(() => {
+      backend.emitState({ transfers: moving(903) });
+    });
+    expect(screen.getByRole('button', { name: /^readme\.txt/ })).toHaveAccessibleName(
+      /Syncing, 75 percent/,
+    );
+    expect(listings).not.toHaveBeenCalled();
+  });
+
+  it('leaves a conflict copy marked as one while something else is in flight', async () => {
+    const backend = createMockBackend();
+    const user = userEvent.setup();
+    render(<App backend={backend} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+    await user.click(screen.getByRole('button', { name: /^Recordings/ }));
+    await screen.findByRole('button', { name: /^field notes\.md/ });
+
+    act(() => {
+      backend.emitState({
+        transfers: {
+          active: [
+            {
+              path: 'Recordings/field notes.md',
+              peerId: 'peer',
+              direction: 'download',
+              bytesDone: 1,
+              bytesTotal: 2,
+            },
+          ],
+          queued: 0,
+          bytesPerSec: 1_000,
+        },
+      });
+    });
+    expect(screen.getByRole('button', { name: /^field notes\.md/ })).toHaveAccessibleName(
+      /Conflict/,
+    );
+  });
+
   it('creates a folder from the dialog and shows it in the list', async () => {
     const user = userEvent.setup();
     render(<App backend={createMockBackend()} />);
