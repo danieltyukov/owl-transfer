@@ -51,6 +51,8 @@ pub struct TransferState {
     uploads: HashMap<(String, String), Upload>,
     queued: u32,
     samples: VecDeque<(Instant, u64)>,
+    /// Every byte moved over the network in either direction, ever.
+    total_bytes: u64,
 }
 
 impl TransferState {
@@ -106,7 +108,14 @@ impl TransferState {
             .map(|(_, u)| fraction(u.done, u.total))
     }
 
+    /// Bytes moved over the network so far, in either direction. Local
+    /// copies never count, which is what makes it a useful measure.
+    pub fn total_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+
     fn note_bytes(&mut self, n: u64) {
+        self.total_bytes += n;
         let now = Instant::now();
         self.samples.push_back((now, n));
         while let Some((t, _)) = self.samples.front() {
@@ -694,5 +703,6 @@ mod tests {
         assert!(s.active.is_empty(), "finished uploads are pruned");
         t.adjust_queued(-5);
         assert_eq!(t.summary().queued, 0);
+        assert_eq!(t.total_bytes(), 1400);
     }
 }

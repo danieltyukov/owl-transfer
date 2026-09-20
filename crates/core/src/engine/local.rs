@@ -57,11 +57,14 @@ impl Engine {
     }
 
     /// The four scan phases, holding the lock only for the two that touch
-    /// the index. A folder switched underneath the scan discards it.
+    /// the index. What the walk found and what hashing found are announced
+    /// together, so a rename (a tombstone plus a new entry) reaches peers in
+    /// one batch and they can copy the old file before removing it. A
+    /// folder switched underneath the scan discards it.
     async fn scan_rels(&self, settings: &Settings, rels: Vec<String>) -> Result<()> {
         let me = self.shared.identity.id.clone();
         let walked = walk_paths(&settings.folder, &rels).await?;
-        let to_hash = {
+        let (mut out, to_hash) = {
             let mut inner = self.lock().await;
             if self.settings().folder != settings.folder {
                 return Ok(());
@@ -75,19 +78,18 @@ impl Engine {
                     ));
                 }
             }
-            self.absorb_local_changes(&mut inner, out, now);
-            to_hash
+            if to_hash.is_empty() {
+                self.absorb_local_changes(&mut inner, out, now);
+                return Ok(());
+            }
+            (out, to_hash)
         };
-        if to_hash.is_empty() {
-            return Ok(());
-        }
         let hashed = hash_files(&settings.folder, to_hash).await;
         let mut inner = self.lock().await;
         if self.settings().folder != settings.folder {
             return Ok(());
         }
         let now = now_ms();
-        let mut out = ScanOutcome::default();
         apply_hashes(&mut inner.index, hashed, &me, now, &mut out);
         self.absorb_local_changes(&mut inner, out, now);
         Ok(())

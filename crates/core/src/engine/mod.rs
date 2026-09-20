@@ -161,6 +161,16 @@ impl Engine {
         self.shared.local_port
     }
 
+    /// Bytes moved over the network so far, in either direction. Local
+    /// copies made for a rename never count. For diagnostics and tests.
+    pub fn network_bytes(&self) -> u64 {
+        self.shared
+            .transfers
+            .lock()
+            .expect("transfers lock")
+            .total_bytes()
+    }
+
     pub fn folder(&self) -> PathBuf {
         self.settings().folder
     }
@@ -337,14 +347,18 @@ impl Engine {
 
     /// Stops every task and connection and writes the index and peers.
     /// Required before dropping the last handle: background tasks hold
-    /// their own handles.
+    /// their own handles. Returns only once the tasks have stopped, so
+    /// the listening port is free when it does.
     pub async fn shutdown(&self) {
         if self.shared.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
         let tasks = std::mem::take(&mut *self.shared.tasks.lock().expect("tasks lock"));
-        for task in tasks {
+        for task in &tasks {
             task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
         }
         let mut inner = self.lock().await;
         inner.watcher = None;
