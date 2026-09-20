@@ -34,8 +34,24 @@ export function PermissionCard({ backend }: PermissionCardProps) {
     check();
     // The system screen is another activity, so coming back is the only moment
     // the answer can have changed.
+    //
+    // Coming back has to be heard two ways. Android's WebView does not fire
+    // `focus` when its activity resumes: `document.hasFocus()` stays false
+    // until something is tapped, so on a phone the card would go on saying
+    // "Not allowed", with sync still paused, until the person happened to
+    // press something. What it does fire is the page visibility change, which
+    // is the one that matters here. A desktop window fires `focus` and not
+    // that, so both are listened for and the check is cheap enough to run
+    // twice where both arrive.
+    const woken = (): void => {
+      if (!document.hidden) check();
+    };
     window.addEventListener('focus', check);
-    return () => window.removeEventListener('focus', check);
+    document.addEventListener('visibilitychange', woken);
+    return () => {
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', woken);
+    };
   }, [check]);
 
   if (permission === 'not-applicable' || permission === null) return null;

@@ -131,6 +131,19 @@ describe('the settings pane', () => {
     expect(await screen.findByText('Allowed')).toBeInTheDocument();
   });
 
+  it('rechecks when the activity comes back, which is all a phone reports', async () => {
+    // Android's WebView fires no focus event when its activity resumes. Left
+    // to that alone the card would say "Not allowed" until the person pressed
+    // something, with sync still paused behind it.
+    const { mock } = await show({ platform: 'android', permission: 'denied' });
+    expect(await screen.findByText('Not allowed')).toBeInTheDocument();
+
+    await mock.openAllFilesSettings();
+    fireEvent(document, new Event('visibilitychange'));
+
+    expect(await screen.findByText('Allowed')).toBeInTheDocument();
+  });
+
   it('names the version and offers the repository', async () => {
     const { mock, user } = await show();
     const open = vi.spyOn(mock, 'openUrl');
