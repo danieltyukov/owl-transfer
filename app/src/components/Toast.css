@@ -18,6 +18,9 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  /* Error text quotes file names, which can be one unbroken word. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 10px 8px 10px 12px;
   border: 1px solid var(--border);
   border-inline-start: 3px solid var(--danger);

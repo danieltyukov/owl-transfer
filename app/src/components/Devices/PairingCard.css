@@ -8,6 +8,9 @@
 .pairing {
   display: flex;
   flex-direction: column;
+  /* The other device names itself; a long name wraps instead of escaping. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 8px;
   padding: 20px 16px 16px;

@@ -20,6 +20,10 @@
   flex-direction: column;
   gap: 12px;
   width: min(380px, 100%);
+  /* A dialog names a file, and a file name can be one unbroken word longer
+     than the panel. It wraps inside the panel rather than running past it. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 18px;
   border: 1px solid var(--border);
   border-radius: var(--r-panel);
