@@ -100,15 +100,22 @@ function fileName(path: string): string {
 }
 
 export async function createTauriBackend(): Promise<Backend> {
-  // Set by the Tauri CLI for both the dev server and the build, and read at
-  // build time by Vite, so the check costs nothing at runtime.
-  const platform: Platform =
-    import.meta.env.TAURI_ENV_PLATFORM === 'android' ? 'android' : 'desktop';
-
-  // The one call that has to happen before the first render, because the
-  // contract has the version as a value rather than a promise. A version that
-  // could not be read is not worth failing the whole app over.
-  const version = await getVersion().catch(() => '0.0.0');
+  /*
+   * The two calls that have to happen before the first render, because the
+   * contract has both of these as values rather than promises.
+   *
+   * The platform is asked of the shell. `import.meta.env.TAURI_ENV_PLATFORM`
+   * is what the Tauri template reaches for and it is always undefined: Vite
+   * matches `envPrefix` as a literal string, so the template's `TAURI_ENV_*`
+   * matches no variable at all. Taking it for 'desktop' draws the title bar
+   * and its window buttons on the phone.
+   *
+   * A version that could not be read is not worth failing the whole app over.
+   */
+  const [platform, version] = await Promise.all([
+    invoke<Platform>('platform'),
+    getVersion().catch(() => '0.0.0'),
+  ]);
 
   return {
     platform,

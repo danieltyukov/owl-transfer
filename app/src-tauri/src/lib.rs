@@ -99,6 +99,7 @@ pub fn run() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            commands::platform,
             commands::get_state,
             commands::list_dir,
             commands::import_paths,
@@ -135,7 +136,7 @@ pub fn run() {
             );
 
             let config = Config {
-                data_dir: data_dir.clone(),
+                data_dir,
                 folder: current.folder,
                 device_name: current.device_name,
                 kind: if cfg!(target_os = "android") {
@@ -152,10 +153,8 @@ pub fn run() {
                 paused,
             };
 
-            // Started before it is managed, because starting only needs to
-            // keep the channel the commands later wait on.
-            let engine_handle = engine::EngineHandle::new(data_dir);
-            engine::start(handle.clone(), &engine_handle, config);
+            let engine_handle = engine::EngineHandle::new(handle.clone(), config);
+            engine_handle.start();
             app.manage(engine_handle);
 
             Ok(())

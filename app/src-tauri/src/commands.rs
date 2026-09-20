@@ -25,6 +25,22 @@ fn failed(error: anyhow::Error) -> String {
     format!("{error:#}")
 }
 
+/// Which shell this is: "android" or "desktop".
+///
+/// Asked of the shell rather than read from a build time variable. The Tauri
+/// CLI sets `TAURI_ENV_PLATFORM`, but it never reaches `import.meta.env`: Vite
+/// matches `envPrefix` as a literal string, and the template's `TAURI_ENV_*`
+/// is a prefix no variable starts with. The interface used it to decide
+/// whether to draw a title bar, and drew the desktop one on the phone.
+#[tauri::command]
+pub fn platform() -> &'static str {
+    if cfg!(target_os = "android") {
+        "android"
+    } else {
+        "desktop"
+    }
+}
+
 #[tauri::command]
 pub async fn get_state(handle: State<'_, EngineHandle>) -> Answer<EngineState> {
     handle.state().await
@@ -267,11 +283,11 @@ pub async fn open_all_files_settings(app: AppHandle) -> Answer<()> {
 ///
 /// Android starts paused, because the folder is out of reach until the person
 /// grants all files access. The permission card calls this with `false` when it
-/// sees the grant.
+/// sees the grant, and resuming also starts an engine whose own start failed:
+/// see `EngineHandle::set_paused` for why that is the same moment.
 #[tauri::command]
 pub async fn set_paused(paused: bool, handle: State<'_, EngineHandle>) -> Answer<()> {
-    handle.engine().await?.set_paused(paused).await;
-    Ok(())
+    handle.set_paused(paused).await
 }
 
 /// Writes the two settings the engine holds back to `settings.json`.
