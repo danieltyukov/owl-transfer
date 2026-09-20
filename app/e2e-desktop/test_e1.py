@@ -5,12 +5,6 @@ of running instances: A on 52734 and B on 52744, with beacons on ports that
 cannot hear each other, so B pairs by typing A's address. Each test is one
 step, each waits with a timeout rather than a sleep, and what a step measured
 goes into the table the run prints at the end.
-
-Two tests are marked `xfail(strict=True)`. They are the two places where the
-app does less than task E1 asks for, both of them in the engine, and the mark
-is how the suite records that without going red every run. If either of them
-starts passing, the run fails and whoever fixed the engine gets to delete the
-mark.
 """
 
 from __future__ import annotations
@@ -330,14 +324,6 @@ def test_09_forget_on_the_dialling_side(pair, measure):
     assert b.texts(".devices-list .device-name") == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the engine tells the other side by refusing its next connection, and "
-        "the side that was dialled never dials: it stores no address for a "
-        "peer that came to it. See the task E report, engine finding 1."
-    ),
-)
 def test_09_the_side_that_was_dialled_is_told(pair):
     """A should hear that B forgot it, and forget B in turn."""
     a, _ = pair
@@ -555,14 +541,6 @@ def test_11_the_device_name_changes(pair, measure):
     assert '"device_name": "Owl B renamed"' in (b.data / "settings.json").read_text()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the name reaches a peer in the Hello at the start of a connection and "
-        "nothing re-sends it, so a connected peer keeps the old one. See the "
-        "task E report, engine finding 2."
-    ),
-)
 def test_11_the_new_name_reaches_a_connected_peer(pair):
     """A should show B's new name while the two are connected."""
     a, _ = pair
