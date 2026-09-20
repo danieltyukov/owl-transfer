@@ -20,7 +20,7 @@ use std::time::Duration;
 use owl_core::{Config, DeviceInfo, Engine, State, SyncSummary, TransferSummary};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::watch;
+use tokio::sync::{watch, Mutex};
 
 /// The shortest gap between two `state` events.
 ///
@@ -46,16 +46,38 @@ struct Failure {
 
 /// What every command reaches the engine through.
 pub struct EngineHandle {
-    started: watch::Sender<Option<Startup>>,
+    app: AppHandle,
+    /// Kept so that a start that failed can be tried again. See `set_paused`.
+    config: Config,
     /// Where `settings.json` lives, so a command that changes a setting can
     /// write it back.
     pub data_dir: PathBuf,
+    started: watch::Sender<Option<Startup>>,
+    /// Held for the length of a start, so two of them cannot run at once and
+    /// find the port taken by each other.
+    starting: Mutex<()>,
 }
 
 impl EngineHandle {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(app: AppHandle, config: Config) -> Self {
         let (started, _) = watch::channel(None);
-        Self { started, data_dir }
+        Self {
+            app,
+            data_dir: config.data_dir.clone(),
+            config,
+            started,
+            starting: Mutex::new(()),
+        }
+    }
+
+    /// Starts the engine and returns at once. Everything that needs it waits.
+    pub fn start(&self) {
+        let app = self.app.clone();
+        let started = self.started.clone();
+        let config = self.config.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = attempt(app, started, config).await;
+        });
     }
 
     /// The engine, waiting for the start to finish if it has not.
@@ -75,6 +97,42 @@ impl EngineHandle {
             Some(Startup::Failed(failure)) => Ok(failure.state.clone()),
             None => Err("the engine is not running".to_string()),
         }
+    }
+
+    /// Stops or restarts watching, scanning and syncing.
+    ///
+    /// Resuming also starts an engine whose own start failed. On Android the
+    /// reason it failed is almost always that the sync folder could not be
+    /// created, because it is in shared storage and the person had not granted
+    /// all files access yet, and this is called the moment they do. Without
+    /// this the app would have to be killed and reopened to use the permission
+    /// it had just been given.
+    pub async fn set_paused(&self, paused: bool) -> Result<(), String> {
+        if let Some(Startup::Running(engine)) = self.startup().await {
+            engine.set_paused(paused).await;
+            return Ok(());
+        }
+
+        let failure = match self.startup().await {
+            Some(Startup::Failed(failure)) => failure,
+            // Nothing to pause, and nothing a retry could fix.
+            _ => return Err("the engine is not running".to_string()),
+        };
+        if paused {
+            return Err(failure.message.clone());
+        }
+
+        let _guard = self.starting.lock().await;
+        // Another caller may have got here first while this one waited.
+        if let Some(Startup::Running(engine)) = self.startup().await {
+            engine.set_paused(false).await;
+            return Ok(());
+        }
+        let config = Config {
+            paused: false,
+            ..self.config.clone()
+        };
+        attempt(self.app.clone(), self.started.clone(), config).await
     }
 
     /// The engine if it has already started, without waiting for one that has
@@ -100,46 +158,49 @@ impl EngineHandle {
     }
 }
 
-/// Starts the engine, and once it is up forwards everything it publishes.
-pub fn start(app: AppHandle, handle: &EngineHandle, config: Config) {
-    let started = handle.started.clone();
-    // Built before the config moves into the task, so a failure has a folder
-    // and a device name to show rather than blanks.
+/// One attempt at starting, recording how it went either way.
+async fn attempt(
+    app: AppHandle,
+    started: watch::Sender<Option<Startup>>,
+    config: Config,
+) -> Result<(), String> {
+    // Built before the config moves, so a failure has a folder and a device
+    // name to show rather than blanks.
     let blank = blank_state(&config);
 
-    tauri::async_runtime::spawn(async move {
-        match Engine::start(config).await {
-            Ok(engine) => {
-                tracing::info!(port = engine.local_port(), "the engine is running");
-                forward_state(app.clone(), engine.clone());
-                forward_dirs(app, engine.clone());
-                // `send_replace` and not `send`. `send` refuses, and throws the
-                // value away, while no receiver exists, which is the normal
-                // case here: the engine usually finishes starting before the
-                // interface has asked it anything. Every command after that
-                // would then wait for a result that had already been dropped.
-                started.send_replace(Some(Startup::Running(engine)));
-            }
-            Err(error) => {
-                let message = format!("{error:#}");
-                tracing::error!(%message, "the engine did not start");
-                let state = State {
-                    paused: true,
-                    errors: vec![format!("Owl Transfer could not start: {message}")],
-                    ..blank
-                };
-                // Recorded before the event, so a `get_state` racing it gets
-                // the same answer the event carries.
-                started.send_replace(Some(Startup::Failed(Arc::new(Failure {
-                    message,
-                    state: state.clone(),
-                }))));
-                if let Err(error) = app.emit("state", &state) {
-                    tracing::error!(%error, "could not tell the interface why");
-                }
-            }
+    match Engine::start(config).await {
+        Ok(engine) => {
+            tracing::info!(port = engine.local_port(), "the engine is running");
+            forward_state(app.clone(), engine.clone());
+            forward_dirs(app, engine.clone());
+            // `send_replace` and not `send`. `send` refuses, and throws the
+            // value away, while no receiver exists, which is the normal case
+            // here: the engine usually finishes starting before the interface
+            // has asked it anything. Every command after that would then wait
+            // for a result that had already been dropped.
+            started.send_replace(Some(Startup::Running(engine)));
+            Ok(())
         }
-    });
+        Err(error) => {
+            let message = format!("{error:#}");
+            tracing::error!(%message, "the engine did not start");
+            let state = State {
+                paused: true,
+                errors: vec![format!("Owl Transfer could not start: {message}")],
+                ..blank
+            };
+            // Recorded before the event, so a `get_state` racing it gets the
+            // same answer the event carries.
+            started.send_replace(Some(Startup::Failed(Arc::new(Failure {
+                message: message.clone(),
+                state: state.clone(),
+            }))));
+            if let Err(error) = app.emit("state", &state) {
+                tracing::error!(%error, "could not tell the interface why");
+            }
+            Err(message)
+        }
+    }
 }
 
 /// The whole snapshot, on every change, at most ten times a second.
