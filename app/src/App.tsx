@@ -7,6 +7,7 @@ import { Settings } from './components/Settings/Settings.js';
 import { Sidebar } from './components/Sidebar.js';
 import { StatusStrip } from './components/StatusStrip.js';
 import { TitleBar } from './components/TitleBar.js';
+import { Toasts, useToasts } from './components/Toast.js';
 import { windowGrab } from './components/WindowControls.js';
 import { PANES, PaneGlyph, type Pane } from './panes.js';
 import { useBackendState } from './state.js';
@@ -29,11 +30,14 @@ export interface AppProps {
  * held here rather than inside it, so moving to Devices and back comes home to
  * the same directory.
  */
+const EMPTY: readonly string[] = [];
+
 export function App({ backend }: AppProps) {
   const state = useBackendState(backend);
   const [pane, setPane] = useState<Pane>('files');
   const [dir, setDir] = useState('');
   const [theme, setTheme] = useTheme();
+  const { toasts, push, dismiss } = useToasts(state?.errors ?? EMPTY);
 
   const frame = backend.window;
   const grab = windowGrab(frame);
@@ -56,7 +60,14 @@ export function App({ backend }: AppProps) {
 
         <main className="pane" key={pane}>
           {pane === 'files' ? (
-            <Files backend={backend} state={state} dir={dir} onDir={setDir} onPane={setPane} />
+            <Files
+              backend={backend}
+              state={state}
+              dir={dir}
+              onDir={setDir}
+              onPane={setPane}
+              onError={push}
+            />
           ) : null}
           {pane === 'devices' ? <Devices backend={backend} state={state} /> : null}
           {pane === 'settings' ? (
@@ -83,6 +94,8 @@ export function App({ backend }: AppProps) {
           ))}
         </nav>
       </div>
+
+      <Toasts toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }

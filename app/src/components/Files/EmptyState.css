@@ -1,0 +1,28 @@
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.empty-line {
+  /* Under 60 characters a line, which is where a sentence this size reads
+     without the eye losing its place on the way back. */
+  max-width: 34ch;
+  color: var(--muted);
+}
+
+.empty-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.empty-hint {
+  align-items: flex-start;
+  max-width: 340px;
+  margin-top: 10px;
+  text-align: start;
+  background: var(--surface-2);
+}

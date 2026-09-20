@@ -1,0 +1,60 @@
+/*
+ * A transparent layer over the window catches the press that dismisses the
+ * menu, which is what lets a press anywhere close it without a document
+ * listener that has to be added and removed by hand.
+ */
+.menu-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+
+.menu {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: menu-in var(--dur-quick) var(--ease);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding-inline: 10px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-small);
+  color: var(--text);
+  text-align: start;
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background-color: var(--hover);
+}
+
+.menu-item-danger {
+  color: var(--danger);
+}
+
+@media (pointer: coarse) {
+  .menu-item {
+    min-height: 40px;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}

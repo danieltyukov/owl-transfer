@@ -1,0 +1,97 @@
+/*
+ * The one place in the interface with elevation, because it is the one place
+ * that is genuinely above the page rather than in it. The scrim does most of
+ * that work; the shadow only lifts the panel off it.
+ */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--scrim);
+  animation: scrim-in var(--dur-quick) var(--ease);
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(380px, 100%);
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  animation: dialog-in var(--dur-base) var(--ease);
+}
+
+.dialog-title {
+  font-size: var(--fs-large);
+  letter-spacing: var(--ls-h2);
+}
+
+.dialog-text {
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.dialog-field {
+  width: 100%;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+/*
+ * Deleting is the one action that fills red. Everywhere else danger is a hover
+ * colour, but the button that confirms a deletion has to look like what it does.
+ *
+ * Hover and press are the scrim tokens laid over the fill rather than a second
+ * red. `--hover` is the text colour at a few percent, so it darkens the fill in
+ * the light theme and lightens it in the dark one, which is the right direction
+ * in both without a token for either.
+ */
+.button-danger-solid {
+  border-color: var(--danger);
+  background-color: var(--danger);
+  color: var(--on-accent);
+  font-weight: 500;
+}
+
+.button-danger-solid:hover {
+  border-color: var(--danger);
+  background-color: var(--danger);
+  box-shadow: inset 0 0 0 999px var(--hover);
+}
+
+.button-danger-solid:active,
+.button-primary:active {
+  box-shadow: inset 0 0 0 999px var(--pressed);
+}
+
+@keyframes scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
