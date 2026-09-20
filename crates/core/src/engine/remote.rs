@@ -3,13 +3,14 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{debug, warn};
 use unicode_normalization::UnicodeNormalization;
 
-use super::inner::{Inner, Settings};
+use super::inner::{Deferred, Inner, Settings};
 use super::Engine;
 use crate::clock::{mtime_ms, now_ms, set_mtime_ms};
 use crate::hash::is_hex_hash;
@@ -166,10 +167,13 @@ impl Engine {
             let mut announce = Vec::new();
             for (remote, tmp) in installs {
                 if let Err(e) = self
-                    .install_file(&mut inner, peer_id, &settings, remote, tmp, now)
+                    .install_file(&mut inner, peer_id, &settings, remote.clone(), tmp, now)
                     .await
                 {
-                    debug!("local copy not installed: {e:#}");
+                    // The copy could not go in; fetch it the ordinary way,
+                    // which retries and re-decides as needed.
+                    debug!("local copy not installed, queueing a fetch: {e:#}");
+                    self.queue_download(&mut inner, peer_id, remote);
                 }
             }
             for remote in downloads {
@@ -442,19 +446,19 @@ impl Engine {
         }
     }
 
-    fn queue_download(&self, inner: &mut Inner, peer_id: &str, remote: Entry) {
-        let path = remote.path.clone();
-        let queued = inner
-            .conns
-            .get(peer_id)
-            .is_some_and(|link| link.enqueue(remote));
-        if queued {
-            inner.queued_paths.insert(path);
-            self.shared
-                .transfers
-                .lock()
-                .expect("transfers lock")
-                .adjust_queued(1);
+    /// Queues a download on the peer's link. Past the queue cap the entry
+    /// waits as deferred and is offered as the queue drains.
+    pub(crate) fn queue_download(&self, inner: &mut Inner, peer_id: &str, remote: Entry) {
+        let cap = self.shared.queue_cap.load(Ordering::Relaxed);
+        let Some(link) = inner.conns.get_mut(peer_id) else {
+            return;
+        };
+        link.pending.insert(remote.path.clone());
+        if let Err(entry) = link.enqueue(remote, cap) {
+            link.deferred.push(Deferred {
+                entry,
+                retry_at_ms: now_ms(),
+            });
         }
     }
 
@@ -469,14 +473,11 @@ impl Engine {
         let peer_id = requester.conn().peer_id.clone();
         {
             let mut inner = self.lock().await;
-            inner.queued_paths.remove(&entry.path);
-            self.shared
-                .transfers
-                .lock()
-                .expect("transfers lock")
-                .adjust_queued(-1);
             if !inner.is_linked(&peer_id, link_id) {
                 return Ok(());
+            }
+            if let Some(link) = inner.conns.get_mut(&peer_id) {
+                link.pending.remove(&entry.path);
             }
             let local = inner.index.get(&entry.path);
             let wanted = matches!(
@@ -594,10 +595,9 @@ impl Engine {
             }
             Decision::Adopt => {
                 record_ancestors(&mut inner.index, folder, &remote.path, now);
-                if let Err(e) = place(&tmp, &dest, &settings.device_name, now).await {
-                    inner.push_error(format!("placing {}: {e:#}", remote.path));
-                    return Ok(());
-                }
+                self.place_in_flight(&tmp, &dest, remote.mtime_ms, &settings.device_name, now)
+                    .await
+                    .with_context(|| format!("placing {}", remote.path))?;
                 apply_adopt(&mut inner.index, &remote, now);
             }
             Decision::Conflict {
@@ -613,21 +613,32 @@ impl Engine {
                     &settings.device_name,
                     now,
                 );
+                let mut moved_aside: Option<(Entry, PathBuf)> = None;
                 if let Some(loser) = loser {
                     let aside = safe_abs(folder, &loser.path).unwrap_or_else(|_| dest.clone());
                     match tokio::fs::rename(&dest, &aside).await {
-                        Ok(()) => {
-                            inner.recent_changes.insert(loser.path.clone(), now);
-                            announce.push(loser);
-                        }
+                        Ok(()) => moved_aside = Some((loser, aside)),
                         Err(_) => {
                             inner.index.remove(&loser.path);
                         }
                     }
                 }
-                if let Err(e) = place(&tmp, &dest, &settings.device_name, now).await {
-                    inner.push_error(format!("placing {}: {e:#}", remote.path));
-                    return Ok(());
+                if let Err(e) = self
+                    .place_in_flight(&tmp, &dest, remote.mtime_ms, &settings.device_name, now)
+                    .await
+                {
+                    // Put things back the way they were so the retry starts
+                    // from the same state.
+                    inner.index.insert(local.clone());
+                    if let Some((loser, aside)) = moved_aside {
+                        inner.index.remove(&loser.path);
+                        let _ = tokio::fs::rename(&aside, &dest).await;
+                    }
+                    return Err(e.context(format!("placing {}", remote.path)));
+                }
+                if let Some((loser, _)) = moved_aside {
+                    inner.recent_changes.insert(loser.path.clone(), now);
+                    announce.push(loser);
                 }
                 inner.recent_changes.insert(winner.path.clone(), now);
                 announce.push(winner);
@@ -648,9 +659,50 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// Sets the entry's mtime on the temporary file and renames it into
+    /// place. The file is registered as in flight for the moment its mtime
+    /// makes it look stale, so the sweep cannot remove it in between. On
+    /// failure the temporary file is removed and the error asks the caller
+    /// to fetch again.
+    async fn place_in_flight(
+        &self,
+        tmp: &Path,
+        dest: &Path,
+        mtime: i64,
+        device_name: &str,
+        now: i64,
+    ) -> Result<()> {
+        self.shared
+            .tmp_in_flight
+            .lock()
+            .expect("in-flight lock")
+            .insert(tmp.to_path_buf());
+        // Some mounts refuse to set times; the scanner tolerates the drift
+        // by rehashing once and keeping the version vector.
+        if let Err(e) = set_mtime_ms(tmp, mtime) {
+            debug!("cannot set mtime on {}: {e}", dest.display());
+        }
+        let placed = place(tmp, dest, device_name, now).await;
+        self.shared
+            .tmp_in_flight
+            .lock()
+            .expect("in-flight lock")
+            .remove(tmp);
+        if placed.is_err() {
+            let _ = tokio::fs::remove_file(tmp).await;
+        }
+        placed
+    }
+}
+
 /// Directories created on the way to a remote path are recorded with an
 /// empty version vector, so the watcher does not announce them as local
-/// changes and any entry a peer holds for them wins.
+/// changes and any entry a peer holds for them wins. This is a silent
+/// index edit on purpose: a tombstoned or file-typed entry at an ancestor
+/// path is replaced by a live directory the file needs, without an
+/// announcement, and a peer's own entry for it always dominates or, if
+/// concurrent, loses as a tombstone to the live directory.
 fn record_ancestors(index: &mut Index, folder: &Path, path: &str, now: i64) {
     let mut prefix = String::new();
     for component in parent_of(path).split('/').filter(|c| !c.is_empty()) {

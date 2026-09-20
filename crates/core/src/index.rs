@@ -52,11 +52,20 @@ impl Entry {
 #[derive(Default, Serialize, Deserialize)]
 struct IndexFile {
     entries: Vec<Entry>,
+    /// See `Index::floor`.
+    #[serde(default)]
+    counter_floor: u64,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct Index {
     entries: BTreeMap<String, Entry>,
+    /// This device's counter floor: every bump of its own component lands
+    /// above it. Raised to the old index's largest counter when the folder
+    /// is switched and to a time-based value when the index was lost, so
+    /// fresh entries are concurrent with, never dominated by, what a peer
+    /// still holds for the same paths. Survives restarts with the index.
+    counter_floor: u64,
 }
 
 impl Index {
@@ -82,6 +91,7 @@ impl Index {
                         .into_iter()
                         .map(|e| (e.path.clone(), e))
                         .collect(),
+                    counter_floor: file.counter_floor,
                 },
                 None,
             )),
@@ -122,8 +132,28 @@ impl Index {
         self.entries.remove(path)
     }
 
+    /// Drops every entry. The counter floor is a property of the device
+    /// and stays.
     pub fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    pub fn floor(&self) -> u64 {
+        self.counter_floor
+    }
+
+    /// Raises the floor; it never goes down.
+    pub fn raise_floor(&mut self, floor: u64) {
+        self.counter_floor = self.counter_floor.max(floor);
+    }
+
+    /// The largest counter of any device in any entry.
+    pub fn max_counter(&self) -> u64 {
+        self.entries
+            .values()
+            .flat_map(|e| e.vv.values().copied())
+            .max()
+            .unwrap_or(0)
     }
 
     pub fn len(&self) -> usize {
@@ -170,6 +200,7 @@ impl Index {
     pub fn save(&self, data_dir: &Path) -> Result<()> {
         let file = IndexFile {
             entries: self.entries.values().cloned().collect(),
+            counter_floor: self.counter_floor,
         };
         write_atomic(
             &data_dir.join(INDEX_FILE),
@@ -233,6 +264,23 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, vec!["index.json"]);
+    }
+
+    #[test]
+    fn the_counter_floor_survives_a_save_and_a_clear() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut index = Index::default();
+        index.insert(entry("a.txt", EntryKind::File, false));
+        assert_eq!(index.max_counter(), 1);
+        index.raise_floor(40);
+        index.raise_floor(10);
+        assert_eq!(index.floor(), 40);
+        index.save(dir.path()).unwrap();
+        let mut again = Index::load(dir.path()).unwrap();
+        assert_eq!(again.floor(), 40);
+        again.clear();
+        assert!(again.is_empty());
+        assert_eq!(again.floor(), 40);
     }
 
     #[test]

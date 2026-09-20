@@ -97,8 +97,9 @@ pub fn resolve_conflict(
     } else {
         local.clone()
     };
+    let floor = index.floor();
     winner.vv = merge(&local.vv, &remote.vv);
-    bump(&mut winner.vv, local_device);
+    bump(&mut winner.vv, local_device, floor);
     winner.seen_at_ms = now_ms;
 
     let loser = if winner_remote && !local.deleted {
@@ -106,7 +107,7 @@ pub fn resolve_conflict(
         let mut copy = local.clone();
         copy.path = join_rel(parent_of(&local.path), &name);
         copy.vv.clear();
-        bump(&mut copy.vv, local_device);
+        bump(&mut copy.vv, local_device, floor);
         copy.seen_at_ms = now_ms;
         index.insert(copy.clone());
         Some(copy)

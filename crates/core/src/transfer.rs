@@ -15,7 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 
-use crate::clock::{mtime_ms, set_mtime_ms};
+use crate::clock::mtime_ms;
 use crate::conn::Connection;
 use crate::hash::blake3_file;
 use crate::index::Entry;
@@ -49,7 +49,6 @@ struct Upload {
 pub struct TransferState {
     downloads: HashMap<(String, String), Progress>,
     uploads: HashMap<(String, String), Upload>,
-    queued: u32,
     samples: VecDeque<(Instant, u64)>,
     /// Every byte moved over the network in either direction, ever.
     total_bytes: u64,
@@ -72,6 +71,13 @@ impl TransferState {
         self.downloads.remove(&(peer.into(), path.into()));
     }
 
+    /// Forgets every transfer with a peer, for a link that went away with
+    /// its downloads still in flight.
+    pub fn end_all_for(&mut self, peer: &str) {
+        self.downloads.retain(|(p, _), _| p != peer);
+        self.uploads.retain(|(p, _), _| p != peer);
+    }
+
     pub fn note_upload(&mut self, peer: &str, path: &str, added: u64, total: u64) {
         let key = (peer.to_string(), path.to_string());
         let up = self.uploads.entry(key).or_insert(Upload {
@@ -83,10 +89,6 @@ impl TransferState {
         up.total = total;
         up.last = Instant::now();
         self.note_bytes(added);
-    }
-
-    pub fn adjust_queued(&mut self, delta: i32) {
-        self.queued = (self.queued as i64 + delta as i64).max(0) as u32;
     }
 
     /// Fraction done if any transfer for the path is active.
@@ -127,7 +129,9 @@ impl TransferState {
         }
     }
 
-    pub fn summary(&mut self) -> TransferSummary {
+    /// `queued` is how many downloads wait on the links, which the engine
+    /// knows and this state does not.
+    pub fn summary(&mut self, queued: u32) -> TransferSummary {
         let now = Instant::now();
         self.uploads
             .retain(|_, u| u.done < u.total && now - u.last < UPLOAD_IDLE);
@@ -160,7 +164,7 @@ impl TransferState {
         let bytes: u64 = self.samples.iter().map(|(_, n)| *n).sum();
         TransferSummary {
             active,
-            queued: self.queued,
+            queued,
             bytes_per_sec: bytes / RATE_WINDOW.as_secs(),
         }
     }
@@ -257,8 +261,10 @@ pub fn tmp_path(root: &Path, entry: &Entry) -> Result<PathBuf> {
 }
 
 /// Fetches a file's bytes from the peer into a temporary file beside the
-/// target, verifies the whole-file hash and sets the mtime. Returns the
-/// temporary path; the caller renames it into place.
+/// target and verifies the whole-file hash. Returns the temporary path;
+/// the caller sets the mtime and renames it into place. The temporary
+/// file keeps a fresh mtime until then, so the stale-file sweep never
+/// mistakes it for a leftover.
 pub async fn download(
     req: Arc<Requester>,
     root: &Path,
@@ -302,11 +308,6 @@ pub async fn download(
                     entry.path
                 ))
             } else {
-                // Some mounts refuse to set times; the scanner tolerates the
-                // drift by rehashing once and keeping the version vector.
-                if let Err(e) = set_mtime_ms(&tmp, entry.mtime_ms) {
-                    tracing::debug!("cannot set mtime on {}: {e}", entry.path);
-                }
                 Ok(())
             }
         }
@@ -393,9 +394,9 @@ pub async fn local_copy(root: &Path, source_rel: &str, entry: &Entry) -> Result<
         let _ = tokio::fs::remove_file(&tmp).await;
         return Ok(None);
     }
-    if let Err(e) = set_mtime_ms(&tmp, entry.mtime_ms) {
-        tracing::debug!("cannot set mtime on {}: {e}", entry.path);
-    }
+    // Some platforms' copies keep the source's mtime; a fresh one keeps
+    // the file out of the stale sweep while it waits to be installed.
+    let _ = crate::clock::set_mtime_ms(&tmp, crate::clock::now_ms());
     Ok(Some(tmp))
 }
 
@@ -566,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_copy_verifies_the_hash_and_sets_mtime() {
+    async fn local_copy_verifies_the_hash_and_keeps_a_fresh_mtime() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("src.bin"), b"same bytes").unwrap();
         let wanted = entry("copy.bin", b"same bytes", 1_700_000_000_123);
@@ -575,10 +576,10 @@ mod tests {
             .unwrap()
             .expect("hashes match");
         assert_eq!(std::fs::read(&tmp).unwrap(), b"same bytes");
-        assert_eq!(
-            mtime_ms(&std::fs::metadata(&tmp).unwrap()),
-            1_700_000_000_123
-        );
+        // The entry's mtime is applied at install time, not here, so the
+        // temporary file cannot look stale while it waits.
+        let age = crate::clock::now_ms() - mtime_ms(&std::fs::metadata(&tmp).unwrap());
+        assert!(age.abs() < 60_000, "age {age} ms");
 
         let other = entry("copy2.bin", b"different", 1);
         assert!(local_copy(dir.path(), "src.bin", &other)
@@ -684,9 +685,8 @@ mod tests {
         let mut t = TransferState::default();
         t.begin_download("peer", "a.bin", 1000);
         t.download_progress("peer", "a.bin", 400);
-        t.adjust_queued(2);
         t.note_upload("peer", "b.bin", 100, 1000);
-        let s = t.summary();
+        let s = t.summary(2);
         assert_eq!(s.queued, 2);
         assert_eq!(s.bytes_per_sec, 250);
         assert_eq!(s.active.len(), 2);
@@ -699,10 +699,16 @@ mod tests {
         assert_eq!(t.progress_for("c.bin"), None);
         t.end_download("peer", "a.bin");
         t.note_upload("peer", "b.bin", 900, 1000);
-        let s = t.summary();
+        let s = t.summary(0);
         assert!(s.active.is_empty(), "finished uploads are pruned");
-        t.adjust_queued(-5);
-        assert_eq!(t.summary().queued, 0);
+        assert_eq!(s.queued, 0);
         assert_eq!(t.total_bytes(), 1400);
+
+        t.begin_download("peer", "c.bin", 10);
+        t.begin_download("other", "d.bin", 10);
+        t.end_all_for("peer");
+        let s = t.summary(0);
+        assert_eq!(s.active.len(), 1);
+        assert_eq!(s.active[0].peer_id, "other");
     }
 }

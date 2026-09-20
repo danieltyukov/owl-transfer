@@ -37,10 +37,6 @@ pub(crate) struct Settings {
     pub paused: bool,
 }
 
-/// Entries per peer that may wait for download at once. Beyond this the
-/// next index exchange or the deferred retry offers them again.
-pub(crate) const MAX_QUEUED_PER_PEER: usize = 10_000;
-
 /// A download that failed repeatedly, to be offered again later. The
 /// worker keeps the attempt count per path, so the wait keeps growing.
 pub(crate) struct Deferred {
@@ -56,22 +52,31 @@ pub(crate) struct PeerLink {
     pub queue: mpsc::UnboundedSender<Entry>,
     /// Entries in `queue` not yet taken by the worker.
     pub queue_len: Arc<AtomicUsize>,
+    /// Downloads waiting for their turn or for a retry; offered again from
+    /// the housekeeping tick.
     pub deferred: Vec<Deferred>,
+    /// Every path this link still has to fetch, queued or deferred, for
+    /// the `Waiting` status and the queued count. Goes away with the link.
+    pub pending: HashSet<String>,
     pub worker: JoinHandle<()>,
+    /// Shared so dropping the link can forget its transfers in flight.
+    pub transfers: crate::transfer::SharedTransfers,
 }
 
 impl PeerLink {
-    /// Queues an entry for download unless the queue is at its cap.
-    pub fn enqueue(&self, entry: Entry) -> bool {
-        if self.queue_len.load(std::sync::atomic::Ordering::Relaxed) >= MAX_QUEUED_PER_PEER {
-            return false;
+    /// Queues an entry for download. Past `cap` it is handed back so the
+    /// caller can keep it as deferred.
+    pub fn enqueue(&self, entry: Entry, cap: usize) -> Result<(), Entry> {
+        if self.queue_len.load(std::sync::atomic::Ordering::Relaxed) >= cap {
+            return Err(entry);
         }
-        if self.queue.send(entry).is_ok() {
-            self.queue_len
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            true
-        } else {
-            false
+        match self.queue.send(entry) {
+            Ok(()) => {
+                self.queue_len
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            }
+            Err(e) => Err(e.0),
         }
     }
 }
@@ -81,6 +86,12 @@ impl Drop for PeerLink {
         self.worker.abort();
         self.requester.fail_all();
         self.conn.close();
+        // The aborted worker never reaches `end_download`; without this a
+        // download it was in the middle of would show as active forever.
+        self.transfers
+            .lock()
+            .expect("transfers lock")
+            .end_all_for(&self.conn.peer_id);
     }
 }
 
@@ -107,8 +118,6 @@ pub(crate) struct Inner {
     pub errors: VecDeque<String>,
     /// Paths changed locally recently, for the `Waiting` status.
     pub recent_changes: HashMap<String, i64>,
-    /// Paths queued for download, for the `Waiting` status.
-    pub queued_paths: HashSet<String>,
     pub last_change_ms: Option<i64>,
     /// Peers with a dial in progress.
     pub dialing: HashSet<String>,
@@ -137,7 +146,6 @@ impl Inner {
             beacon: None,
             errors: VecDeque::new(),
             recent_changes: HashMap::new(),
-            queued_paths: HashSet::new(),
             last_change_ms: None,
             dialing: HashSet::new(),
             tombstone_retries: HashSet::new(),
@@ -147,6 +155,16 @@ impl Inner {
             last_connect_rescan_ms: 0,
             next_link_id: 1,
         }
+    }
+
+    /// Whether any link still has to fetch `path`.
+    pub fn is_pending(&self, path: &str) -> bool {
+        self.conns.values().any(|l| l.pending.contains(path))
+    }
+
+    /// Downloads waiting across all links.
+    pub fn pending_count(&self) -> u32 {
+        self.conns.values().map(|l| l.pending.len()).sum::<usize>() as u32
     }
 
     /// Whether `link_id` is the connection currently registered for the
@@ -272,7 +290,7 @@ impl Engine {
             .transfers
             .lock()
             .expect("transfers lock")
-            .summary();
+            .summary(inner.pending_count());
 
         let peers = inner
             .peers
@@ -318,7 +336,7 @@ impl Engine {
             && transfers.active.is_empty()
             && transfers.queued == 0
             && inner.recent_changes.is_empty()
-            && inner.queued_paths.is_empty();
+            && inner.pending_count() == 0;
 
         State {
             device: DeviceInfo {
