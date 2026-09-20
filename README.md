@@ -59,10 +59,12 @@ Downloads are on the
 [releases page](https://github.com/danieltyukov/owl-transfer/releases/latest).
 
 **Android.** Needs Android 11 or newer. Download `owl-transfer.apk` and open
-it. Android will ask you to allow installs from your browser, once. The app
-then asks for the All files access permission, which is what lets the sync
-folder live at `/storage/emulated/0/OwlTransfer` where every other app can see
-it; sync stays paused until you grant it. Releases from this repository are
+it. Android will ask you to allow installs from your browser, once. The first
+screen then carries a card asking for the All files access permission, which is
+what lets the sync folder live at `/storage/emulated/0/OwlTransfer` where every
+other app can see it. The card opens Android's own permission screen, sync
+stays paused until you grant it, and the app notices the grant by itself
+whichever screen you are on when you make it. Releases from this repository are
 signed with the maintainer's key, which is not Google's, so an update installs
 over the top only if it came from the same place. A fork that builds without
 the signing secrets gets an unsigned APK instead, and `SECURITY.md` says what
@@ -77,7 +79,10 @@ they run on older systems as well as newer ones.
 admin prompt and fetches the WebView2 runtime itself if the machine lacks it.
 The installer is not code-signed, so SmartScreen asks once: More info, then Run
 anyway. `OwlTransfer_x64.msi` is the same build for anyone who deploys with
-MSI.
+MSI. The first launch listens on TCP 52734, which raises a Defender Firewall
+prompt: allow it on private networks. Declining it leaves the app running with
+neither discovery nor incoming connections, which looks like a network fault
+rather than a permission.
 
 The first launch creates the folder and starts listening. There is no account
 step to skip and nothing to configure before it works.

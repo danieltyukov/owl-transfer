@@ -16,4 +16,9 @@ MimeType={{mime_type}}
 # On NVIDIA, WebKitGTK without __NV_DISABLE_EXPLICIT_SYNC=1 hands back an empty
 # frame: the window comes up blank white, with no error anywhere. If a machine
 # is still blank with it set, try WEBKIT_DISABLE_DMABUF_RENDERER=1 as well.
+#
+# The one that actually counts is lib.rs, which sets the same variable in
+# process before anything creates a webview: that covers `tauri dev`, running
+# the binary directly, and the AppImage, whose AppRun never reads this file.
+# This line covers a launcher that execs Exec= and nothing else.
 Exec=env __NV_DISABLE_EXPLICIT_SYNC=1 {{exec}} {{exec_arg}}

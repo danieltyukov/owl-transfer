@@ -117,23 +117,40 @@ cd app && npx tauri android build --apk --target aarch64 --target x86_64
 ```
 
 `ANDROID_HOME` and `NDK_HOME` have to point at the SDK and at the NDK version
-you installed. `app/src-tauri/gen/android/` is committed because the manifest,
-`MainActivity.kt` and the plugin class are source; everything Gradle generates
-inside it is gitignored.
+you installed. `app/src-tauri/gen/android/` is committed because parts of it are
+source rather than output; everything Gradle generates inside it is gitignored.
 
-Three things in that project are ours rather than generated, and a regenerate
-would drop them. The manifest declares `MANAGE_EXTERNAL_STORAGE` and the
-`ACTION_SEND` intent filters. `MainActivity` acquires a `MulticastLock`,
-without which the Wi-Fi driver filters the discovery broadcasts and Nearby
-stays permanently empty, and it copies shared files into the sync folder.
-`OwlPlugin` answers the two permission commands.
+A `tauri android init` regenerates that project from the template, and
+everything in this list is ours rather than generated, so a regenerate would
+drop it:
+
+- `AndroidManifest.xml`: the `MANAGE_EXTERNAL_STORAGE` permission, the
+  `ACTION_SEND` and `ACTION_SEND_MULTIPLE` intent filters, the `FileProvider`
+  over external storage, the backup and device transfer exclusions, and
+  `singleTask`.
+- `MainActivity.kt`: the `MulticastLock`, without which the Wi-Fi driver
+  filters the discovery broadcasts and Nearby stays permanently empty, and the
+  copying of shared files into the sync folder.
+- `OwlPlugin.kt`: the whole class. It answers five commands,
+  `allFilesPermission`, `openAllFilesSettings`, `displayName`, `openPath` and
+  `setWindowTheme`.
+- `res/xml/file_paths.xml`, `res/xml/backup_rules.xml` and
+  `res/xml/data_extraction_rules.xml`.
+- `res/values/colors.xml`, `res/values-night/colors.xml` and
+  `res/values/themes.xml`, which are what make the system bars follow the
+  app's own theme.
+- `app/build.gradle.kts`: `minSdk 30`, `targetSdk 35`, the release signing
+  block that reads `keystore.properties`, and minification.
+
+Check that list against `git diff` before committing a regenerate.
 
 ## Two instances on one machine
 
 The engine itself reads no environment, because it takes a `Config` and that is
 the seam described above. The Tauri shell's settings module,
 `app/src-tauri/src/settings.rs`, reads four overrides and passes them into that
-`Config`, so that sync can be exercised without a second device:
+`Config`, so that sync can be exercised without a second device. `lib.rs` reads
+a fifth for its own log filter:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
@@ -141,6 +158,7 @@ the seam described above. The Tauri shell's settings module,
 | `OWL_FOLDER` | `~/OwlTransfer` | The folder to sync |
 | `OWL_PORT` | `52734` | The TCP port this instance listens on |
 | `OWL_BEACON_PORT` | `52735` | The UDP discovery port. `0` disables the beacon |
+| `OWL_LOG` | `info` | The `tracing` filter on the desktop, read by `lib.rs` rather than by `settings.rs`. `OWL_LOG` rather than `RUST_LOG` so that turning this app up to debug does not turn up every other Rust program in the same shell |
 
 `OWL_DATA_DIR` is the important one: the certificate lives there, so two
 instances sharing it are one device as far as the protocol is concerned, and
@@ -154,6 +172,12 @@ OWL_PORT=52744 \
 OWL_BEACON_PORT=0 \
   ./owl-transfer
 ```
+
+`OWL_FOLDER` is read once, at startup. Renaming the device or moving the folder
+from the Settings screen writes the folder the engine is using back into that
+instance's `settings.json`, so an overridden folder becomes the stored one and
+is used on the next launch even without the variable. That only matters to a
+development instance, and deleting its data directory undoes it.
 
 The beacon is off on the second instance because two sockets bound to the same
 UDP port on one machine share the incoming packets between them rather than
