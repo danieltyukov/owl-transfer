@@ -109,6 +109,9 @@
   --fs-large: 17px;
   --fs-h2: 19px;
   --fs-h1: 24px;
+  /* The pairing code, and nothing else. It is the one thing in the app a
+     person reads off one screen and checks against another across a room. */
+  --fs-code: 32px;
   /* Tracking for grouped digits: the pairing code and the device id, where the
      job is to be read aloud to someone holding the other device. */
   --ls-micro: 0.07em;

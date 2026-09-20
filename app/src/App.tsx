@@ -69,7 +69,9 @@ export function App({ backend }: AppProps) {
               onError={push}
             />
           ) : null}
-          {pane === 'devices' ? <Devices backend={backend} state={state} /> : null}
+          {pane === 'devices' ? (
+            <Devices backend={backend} state={state} onError={push} />
+          ) : null}
           {pane === 'settings' ? (
             <Settings backend={backend} state={state} theme={theme} onTheme={setTheme} />
           ) : null}
