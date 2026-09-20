@@ -36,6 +36,13 @@ pub fn blake3_hex(data: &[u8]) -> String {
     blake3::hash(data).to_hex().to_string()
 }
 
+/// Whether a string is exactly a lowercase hex BLAKE3 digest. Anything a
+/// peer sends as a hash must pass this before it reaches a file name or a
+/// request.
+pub fn is_hex_hash(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +58,15 @@ mod tests {
             blake3_hex(b""),
             "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
         );
+    }
+
+    #[test]
+    fn hex_hash_validation() {
+        assert!(is_hex_hash(&blake3_hex(b"x")));
+        assert!(!is_hex_hash(""));
+        assert!(!is_hex_hash(&"A".repeat(64)));
+        assert!(!is_hex_hash(&"a".repeat(63)));
+        assert!(!is_hex_hash("../../../escape/"));
+        assert!(!is_hex_hash(&"\u{20ac}".repeat(6)));
     }
 }

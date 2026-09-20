@@ -1,6 +1,7 @@
 //! The engine's mutable state and the small helpers every part of it uses.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -84,6 +85,8 @@ pub(crate) struct Inner {
     pub tombstone_retries: HashSet<String>,
     /// This machine's IPv4 addresses, refreshed by the housekeeping tick.
     pub addresses: Vec<String>,
+    /// Addresses that may not ask to pair until the given time.
+    pub pairing_cooldown: HashMap<IpAddr, i64>,
     pub next_link_id: u64,
 }
 
@@ -104,8 +107,18 @@ impl Inner {
             dialing: HashSet::new(),
             tombstone_retries: HashSet::new(),
             addresses: crate::beacon::local_ipv4_addresses(),
+            pairing_cooldown: HashMap::new(),
             next_link_id: 1,
         }
+    }
+
+    /// Whether `link_id` is the connection currently registered for the
+    /// peer. Frames from an older connection, or from a peer forgotten
+    /// since they were read, fail this.
+    pub fn is_linked(&self, peer_id: &str, link_id: u64) -> bool {
+        self.conns
+            .get(peer_id)
+            .is_some_and(|l| l.link_id == link_id)
     }
 
     pub fn push_error(&mut self, message: String) {
@@ -122,6 +135,7 @@ impl Inner {
         let before = self.nearby.len() + self.recent_changes.len();
         self.nearby.retain(|_, h| now - h.at_ms <= EXPIRY_MS);
         self.recent_changes.retain(|_, t| now - *t < RECENT_MS);
+        self.pairing_cooldown.retain(|_, until| *until > now);
         before != self.nearby.len() + self.recent_changes.len()
     }
 }

@@ -38,9 +38,16 @@ pub enum Control {
         id: String,
         name: String,
         kind: DeviceKind,
+        /// Hex SHA-256 of the requester's nonce, revealed after the
+        /// challenge.
+        commit: String,
     },
     PairChallenge {
-        /// 32 hex characters.
+        /// The acceptor's nonce, 32 hex characters.
+        nonce: String,
+    },
+    PairReveal {
+        /// The requester's nonce, 32 hex characters.
         nonce: String,
     },
     PairAccept,
@@ -233,5 +240,10 @@ mod tests {
         })
         .unwrap();
         assert!(json.starts_with(r#"{"type":"pair_challenge","nonce":"#));
+        let json = serde_json::to_string(&Control::PairReveal {
+            nonce: "00".repeat(16),
+        })
+        .unwrap();
+        assert!(json.starts_with(r#"{"type":"pair_reveal","nonce":"#));
     }
 }

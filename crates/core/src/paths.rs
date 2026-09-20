@@ -1,9 +1,9 @@
 //! Relative path rules. Every path the engine stores or sends is relative to
 //! the sync folder, uses forward slashes and is NFC normalised.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use unicode_normalization::UnicodeNormalization;
 
 /// Strips `root`, joins the remaining components with `/` and normalises to
@@ -43,6 +43,30 @@ pub fn validate_rel(rel: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The absolute path of a relative one, refusing any component that is a
+/// symbolic link, so a peer can never write or delete through a link the
+/// person keeps inside the folder. Components that do not exist yet are
+/// fine; `""` is the root itself.
+pub fn safe_abs(root: &Path, rel: &str) -> Result<PathBuf> {
+    if rel.is_empty() {
+        return Ok(root.to_path_buf());
+    }
+    validate_rel(rel)?;
+    let mut abs = root.to_path_buf();
+    for component in rel.split('/') {
+        abs.push(component);
+        match std::fs::symlink_metadata(&abs) {
+            Ok(md) if md.file_type().is_symlink() => {
+                bail!("{rel} goes through a symbolic link")
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(root.join(rel)),
+            Err(e) => return Err(e).with_context(|| format!("checking {}", abs.display())),
+        }
+    }
+    Ok(abs)
 }
 
 /// Rejects anything that cannot be a single file or folder name.
@@ -90,7 +114,8 @@ pub fn is_under(child: &str, dir: &str) -> bool {
 
 const CONFLICT_MARK: &str = " (conflict from ";
 
-/// `report (conflict from Pixel 2026-09-20 13-45).pdf`. The time is UTC; the
+/// `report (conflict from Pixel 2026-09-20 13-45).pdf`. The time is UTC,
+/// which stands as a decision: the crate carries no timezone data, and the
 /// name only has to be unique and readable.
 pub fn conflict_name(name: &str, device_name: &str, when_ms: i64) -> String {
     let (stem, ext) = split_extension(name);
@@ -177,6 +202,30 @@ mod tests {
         assert!(validate_rel("a\0b").is_err());
         assert!(validate_rel("a/b.txt").is_ok());
         assert!(validate_rel("..hidden").is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_abs_refuses_symbolic_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("file"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        std::os::unix::fs::symlink(outside.join("file"), root.join("f")).unwrap();
+
+        assert!(safe_abs(&root, "link/x").is_err());
+        assert!(safe_abs(&root, "link").is_err());
+        assert!(safe_abs(&root, "f").is_err());
+        assert_eq!(safe_abs(&root, "real/x").unwrap(), root.join("real/x"));
+        assert_eq!(
+            safe_abs(&root, "new/deeper/x").unwrap(),
+            root.join("new/deeper/x")
+        );
+        assert_eq!(safe_abs(&root, "").unwrap(), root);
+        assert!(safe_abs(&root, "../x").is_err());
     }
 
     #[test]

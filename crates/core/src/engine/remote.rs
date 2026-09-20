@@ -5,28 +5,53 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::inner::{Inner, Settings};
 use super::Engine;
 use crate::clock::{mtime_ms, now_ms, set_mtime_ms};
+use crate::hash::is_hex_hash;
 use crate::ignore::is_ignored;
 use crate::index::{Entry, EntryKind};
-use crate::paths::{conflict_name, parent_of, validate_rel};
+use crate::paths::{conflict_name, parent_of, safe_abs, validate_rel};
 use crate::sync::{apply_adopt, decide, needs_bytes, resolve_conflict, Decision};
 use crate::transfer::{self, Requester};
+
+/// Whether an entry from the wire is well formed: a valid relative path
+/// that is not ignored, a lowercase hex hash on live files and no hash
+/// anywhere else. The hash is the only wire string besides the path that
+/// reaches a file name, so it is checked before anything is done with it.
+fn acceptable(remote: &Entry) -> bool {
+    if validate_rel(&remote.path).is_err() || is_ignored(&remote.path) {
+        return false;
+    }
+    if remote.deleted || remote.kind == EntryKind::Dir {
+        remote.hash.is_none()
+    } else {
+        remote.hash.as_deref().is_some_and(is_hex_hash)
+    }
+}
 
 impl Engine {
     /// Handles one batch of entries from a peer. Live entries go first so a
     /// rename (a new path plus a tombstone) can copy the old file before it
-    /// is removed.
-    pub(crate) async fn on_remote_entries(&self, peer_id: &str, entries: Vec<Entry>) {
+    /// is removed. `link_id` names the connection the batch came in on;
+    /// frames still buffered from a peer that was forgotten or replaced
+    /// since are dropped.
+    pub(crate) async fn on_remote_entries(&self, peer_id: &str, link_id: u64, entries: Vec<Entry>) {
         let settings = self.settings();
         if settings.paused || self.is_stopped() {
             return;
         }
         let me = self.shared.identity.id.clone();
         let mut inner = self.lock().await;
+        if !inner.is_linked(peer_id, link_id) {
+            debug!(
+                "dropping {} entries from a stale connection to {peer_id}",
+                entries.len()
+            );
+            return;
+        }
         let now = now_ms();
 
         let (mut live, mut tombs): (Vec<Entry>, Vec<Entry>) =
@@ -42,7 +67,11 @@ impl Engine {
 
         let mut announce = Vec::new();
         for remote in live.into_iter().chain(tombs) {
-            if validate_rel(&remote.path).is_err() || is_ignored(&remote.path) {
+            if !acceptable(&remote) {
+                warn!(
+                    "{peer_id} sent a malformed entry for {:?}; dropped",
+                    remote.path
+                );
                 continue;
             }
             let local = inner.index.get(&remote.path).cloned();
@@ -52,6 +81,7 @@ impl Engine {
                     self.adopt(
                         &mut inner,
                         peer_id,
+                        link_id,
                         &settings,
                         local.as_ref(),
                         remote,
@@ -111,6 +141,7 @@ impl Engine {
         &self,
         inner: &mut Inner,
         peer_id: &str,
+        link_id: u64,
         settings: &Settings,
         local: Option<&Entry>,
         remote: Entry,
@@ -125,10 +156,11 @@ impl Engine {
                     if l.kind == EntryKind::Dir && inner.tombstone_retries.insert(l.path.clone()) {
                         // Its children may be in a later chunk; look again
                         // once they have had a chance to arrive.
-                        let _ = self
-                            .shared
-                            .retry_tx
-                            .send((peer_id.to_string(), remote.clone()));
+                        let _ = self.shared.retry_tx.send((
+                            peer_id.to_string(),
+                            link_id,
+                            remote.clone(),
+                        ));
                         return;
                     }
                     inner.tombstone_retries.remove(&l.path);
@@ -157,7 +189,13 @@ impl Engine {
             apply_adopt(&mut inner.index, &remote, now);
             inner.last_change_ms = Some(now);
         } else if remote.kind == EntryKind::Dir {
-            let abs = folder.join(&remote.path);
+            let abs = match safe_abs(folder, &remote.path) {
+                Ok(abs) => abs,
+                Err(e) => {
+                    inner.push_error(format!("refusing {}: {e:#}", remote.path));
+                    return;
+                }
+            };
             if let Some(l) = local.filter(|l| l.is_live_file()) {
                 if !delete_local(folder, l).await {
                     let _ = self.shared.watch_tx.try_send(vec![l.path.clone()]);
@@ -175,7 +213,9 @@ impl Engine {
             // Same content already here: align the mtime, keep the merged
             // vector.
             if local.is_some_and(|l| l.mtime_ms != remote.mtime_ms) {
-                let _ = set_mtime_ms(&folder.join(&remote.path), remote.mtime_ms);
+                if let Ok(abs) = safe_abs(folder, &remote.path) {
+                    let _ = set_mtime_ms(&abs, remote.mtime_ms);
+                }
             }
             apply_adopt(&mut inner.index, &remote, now);
         } else {
@@ -205,9 +245,26 @@ impl Engine {
             &settings.device_name,
             now,
         );
-        if let Some(loser) = loser {
-            let from = folder.join(&local.path);
-            let to = folder.join(&loser.path);
+        let (from, to, dir) = match (
+            safe_abs(folder, &local.path),
+            loser.as_ref().map(|l| safe_abs(folder, &l.path)),
+            safe_abs(folder, &remote.path),
+        ) {
+            (Ok(from), Some(Ok(to)), Ok(dir)) => (from, Some(to), dir),
+            (Ok(from), None, Ok(dir)) => (from, None, dir),
+            _ => {
+                inner.push_error(format!(
+                    "refusing {}: symbolic link in the path",
+                    remote.path
+                ));
+                if let Some(l) = &loser {
+                    inner.index.remove(&l.path);
+                }
+                inner.index.insert(local.clone());
+                return;
+            }
+        };
+        if let (Some(loser), Some(to)) = (loser, to) {
             match tokio::fs::rename(&from, &to).await {
                 Ok(()) => {
                     inner.recent_changes.insert(loser.path.clone(), now);
@@ -218,7 +275,7 @@ impl Engine {
                 }
             }
         }
-        if let Err(e) = tokio::fs::create_dir_all(folder.join(&remote.path)).await {
+        if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             inner.push_error(format!("creating {}: {e}", remote.path));
             return;
         }
@@ -241,6 +298,10 @@ impl Engine {
         let Some(hash) = remote.hash.as_deref() else {
             return;
         };
+        if let Err(e) = safe_abs(&settings.folder, &remote.path) {
+            inner.push_error(format!("refusing {}: {e:#}", remote.path));
+            return;
+        }
         let source = inner
             .index
             .find_by_hash(hash)
@@ -270,7 +331,12 @@ impl Engine {
     }
 
     /// The download worker's job for one queued entry.
-    pub(crate) async fn fetch_entry(&self, requester: &Arc<Requester>, entry: Entry) -> Result<()> {
+    pub(crate) async fn fetch_entry(
+        &self,
+        requester: &Arc<Requester>,
+        link_id: u64,
+        entry: Entry,
+    ) -> Result<()> {
         let me = self.shared.identity.id.clone();
         let peer_id = requester.conn().peer_id.clone();
         {
@@ -281,6 +347,9 @@ impl Engine {
                 .lock()
                 .expect("transfers lock")
                 .adjust_queued(-1);
+            if !inner.is_linked(&peer_id, link_id) {
+                return Ok(());
+            }
             let local = inner.index.get(&entry.path);
             let wanted = matches!(
                 decide(local, &entry, &me, &peer_id),
@@ -347,7 +416,14 @@ impl Engine {
     ) {
         let me = &self.shared.identity.id;
         let folder = &settings.folder;
-        let dest = folder.join(&remote.path);
+        let dest = match safe_abs(folder, &remote.path) {
+            Ok(dest) => dest,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                inner.push_error(format!("refusing {}: {e:#}", remote.path));
+                return;
+            }
+        };
         let local = inner.index.get(&remote.path).cloned();
         let mut announce = Vec::new();
         match decide(local.as_ref(), &remote, me, peer_id) {
@@ -372,7 +448,8 @@ impl Engine {
                     now,
                 );
                 if let Some(loser) = loser {
-                    match tokio::fs::rename(&dest, folder.join(&loser.path)).await {
+                    let aside = safe_abs(folder, &loser.path).unwrap_or_else(|_| dest.clone());
+                    match tokio::fs::rename(&dest, &aside).await {
                         Ok(()) => {
                             inner.recent_changes.insert(loser.path.clone(), now);
                             announce.push(loser);
@@ -431,7 +508,9 @@ async fn place(tmp: &Path, dest: &Path, device_name: &str, now: i64) -> Result<(
 /// Returns false if anything on disk differs from the index, in which case
 /// nothing is removed: a deletion never destroys an unscanned edit.
 async fn delete_local(folder: &Path, local: &Entry) -> bool {
-    let abs = folder.join(&local.path);
+    let Ok(abs) = safe_abs(folder, &local.path) else {
+        return false;
+    };
     match tokio::fs::symlink_metadata(&abs).await {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
         Err(_) => false,

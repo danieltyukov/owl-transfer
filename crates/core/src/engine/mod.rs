@@ -16,7 +16,7 @@ mod tasks;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{bail, Context, Result};
@@ -59,10 +59,12 @@ pub(crate) struct Shared {
     pub(crate) state_dirty: Notify,
     pub(crate) index_dirty: Notify,
     pub(crate) watch_tx: mpsc::Sender<Vec<String>>,
-    /// Remote tombstones to apply again after a short delay.
-    pub(crate) retry_tx: mpsc::UnboundedSender<(String, crate::index::Entry)>,
+    /// Remote tombstones to apply again after a short delay: peer, link, entry.
+    pub(crate) retry_tx: mpsc::UnboundedSender<(String, u64, crate::index::Entry)>,
     pub(crate) tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
     pub(crate) stopped: AtomicBool,
+    /// Connections that have not yet proven a pairing.
+    pub(crate) unauthenticated: AtomicUsize,
 }
 
 impl Engine {
@@ -114,6 +116,7 @@ impl Engine {
                 retry_tx,
                 tasks: std::sync::Mutex::new(Vec::new()),
                 stopped: AtomicBool::new(false),
+                unauthenticated: AtomicUsize::new(0),
             }),
         };
 
@@ -257,7 +260,7 @@ impl Engine {
         let Some(addr) = addr else {
             bail!("that device is no longer nearby");
         };
-        peer::pair_outgoing(self.clone(), addr).await
+        peer::pair_outgoing(self.clone(), addr, Some(id.to_string())).await
     }
 
     pub async fn pair_with_address(&self, host: &str, port: u16) -> Result<()> {
@@ -273,7 +276,7 @@ impl Engine {
         let Some(addr) = addrs.first().copied() else {
             bail!("{host} did not resolve to an address");
         };
-        peer::pair_outgoing(self.clone(), addr).await
+        peer::pair_outgoing(self.clone(), addr, None).await
     }
 
     /// Accepts or declines an incoming request, or cancels an outgoing one.

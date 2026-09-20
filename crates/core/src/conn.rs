@@ -240,8 +240,10 @@ async fn write_loop(
             Err(mpsc::error::TryRecvError::Empty) => {}
             Err(mpsc::error::TryRecvError::Disconnected) => break,
         }
+        // A frame that is ready goes out before a close is honoured, so a
+        // final reject or accept reaches the peer.
         tokio::select! {
-            _ = wait_closed(&mut closed) => break,
+            biased;
             next = out_rx.recv() => match next {
                 Some(frame) => {
                     if let Err(e) = wr.write_all(&encode(&frame)).await {
@@ -250,7 +252,13 @@ async fn write_loop(
                     }
                 }
                 None => break,
-            }
+            },
+            _ = wait_closed(&mut closed) => break,
+        }
+    }
+    while let Ok(frame) = out_rx.try_recv() {
+        if wr.write_all(&encode(&frame)).await.is_err() {
+            break;
         }
     }
     let _ = wr.shutdown().await;

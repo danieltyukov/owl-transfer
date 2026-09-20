@@ -1,15 +1,24 @@
 //! Two engines in one process on the loopback interface, paired by address.
 //! Every wait is bounded; the suite is meant to finish well under a minute.
 
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use owl_core::conn::{self, Connection};
 use owl_core::hash::{blake3_file, blake3_hex};
+use owl_core::identity::Identity;
+use owl_core::index::{Entry, EntryKind};
+use owl_core::pairing;
+use owl_core::proto::{Control, Frame, PROTOCOL_VERSION};
 use owl_core::state::{EntryStatus, PairingDirection};
 use owl_core::{Config, DeviceKind, Engine};
 use rand::RngCore;
 use tempfile::TempDir;
+use tokio::sync::mpsc;
+use tokio::time::timeout;
 
 const WAIT: Duration = Duration::from_secs(5);
 const RECONNECT_WAIT: Duration = Duration::from_secs(20);
@@ -169,6 +178,109 @@ fn random_bytes(n: usize) -> Vec<u8> {
     let mut buf = vec![0u8; n];
     rand::rng().fill_bytes(&mut buf);
     buf
+}
+
+/// A peer driven by hand at the frame level, for probing the engine with
+/// things a real engine would never send.
+struct Raw {
+    identity: Identity,
+    conn: Connection,
+    rx: mpsc::Receiver<Frame>,
+    _dir: TempDir,
+}
+
+async fn raw_dial(a: &Device, name: &str) -> Raw {
+    let dir = tempfile::tempdir().unwrap();
+    let identity = Identity::load_or_create(dir.path()).unwrap();
+    let hello = Control::Hello {
+        id: identity.id.clone(),
+        name: name.into(),
+        kind: DeviceKind::Phone,
+        version: PROTOCOL_VERSION,
+    };
+    let addr = SocketAddr::from(([127, 0, 0, 1], a.engine.local_port()));
+    let (conn, rx) = conn::dial(&identity, Arc::new(|_| false), addr, hello)
+        .await
+        .expect("the handshake itself succeeds so pairing is possible");
+    assert_eq!(conn.peer_id, a.id());
+    Raw {
+        identity,
+        conn,
+        rx,
+        _dir: dir,
+    }
+}
+
+/// The next control frame, answering pings on the way; `None` on a close
+/// or when `limit` passes.
+async fn next_control(raw: &mut Raw, limit: Duration) -> Option<Control> {
+    let deadline = Instant::now() + limit;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match timeout(left, raw.rx.recv()).await {
+            Ok(Some(Frame::Control(Control::Ping))) => {
+                let _ = raw.conn.send(Frame::Control(Control::Pong)).await;
+            }
+            Ok(Some(Frame::Control(c))) => return Some(c),
+            Ok(Some(Frame::Block { .. })) => {}
+            Ok(None) | Err(_) => return None,
+        }
+    }
+}
+
+/// Pairs a raw peer with `a` by hand: commit, challenge, reveal, accept.
+async fn raw_pair(a: &Device, name: &str) -> Raw {
+    let mut raw = raw_dial(a, name).await;
+    let nonce_mine = pairing::random_nonce();
+    raw.conn
+        .send(Frame::Control(Control::PairRequest {
+            id: raw.identity.id.clone(),
+            name: name.into(),
+            kind: DeviceKind::Phone,
+            commit: pairing::commitment(&nonce_mine),
+        }))
+        .await
+        .unwrap();
+    let Some(Control::PairChallenge { nonce }) = next_control(&mut raw, WAIT).await else {
+        panic!("expected a challenge");
+    };
+    let nonce_theirs = pairing::nonce_from_hex(&nonce).unwrap();
+    raw.conn
+        .send(Frame::Control(Control::PairReveal {
+            nonce: pairing::nonce_to_hex(&nonce_mine),
+        }))
+        .await
+        .unwrap();
+    let code = pairing::pairing_code(&nonce_theirs, &nonce_mine, &a.id(), &raw.identity.id);
+    assert!(wait_until(|| a.engine.state().pending_pairing.is_some(), WAIT).await);
+    assert_eq!(a.engine.state().pending_pairing.unwrap().code, code);
+    a.engine
+        .respond_to_pairing(&raw.identity.id, true)
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut raw, WAIT).await,
+        Some(Control::PairAccept)
+    ));
+    assert!(matches!(
+        next_control(&mut raw, WAIT).await,
+        Some(Control::Index { .. })
+    ));
+    assert!(wait_until(|| connected_to(&a.engine, &raw.identity.id), WAIT).await);
+    raw
+}
+
+fn wire_entry(path: &str, kind: EntryKind, hash: Option<&str>, size: u64, author: &str) -> Entry {
+    Entry {
+        path: path.into(),
+        kind,
+        size,
+        mtime_ms: 1_700_000_000_000,
+        hash: hash.map(str::to_string),
+        deleted: false,
+        vv: BTreeMap::from([(author.to_string(), 1)]),
+        seen_at_ms: 0,
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -473,38 +585,151 @@ async fn reconnect_after_restart_catches_up() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unpaired_peer_is_refused() {
     let a = start("Alpha").await;
-    let stranger_dir = tempfile::tempdir().unwrap();
-    let stranger = owl_core::identity::Identity::load_or_create(stranger_dir.path()).unwrap();
-    let hello = owl_core::proto::Control::Hello {
-        id: stranger.id.clone(),
-        name: "Stranger".into(),
-        kind: DeviceKind::Phone,
-        version: owl_core::proto::PROTOCOL_VERSION,
-    };
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], a.engine.local_port()));
-    let (conn, mut rx) = owl_core::conn::dial(&stranger, Arc::new(|_| false), addr, hello)
-        .await
-        .expect("the handshake itself succeeds so pairing is possible");
-    assert_eq!(conn.peer_id, a.id());
+    a.write("keep.txt", b"still here");
+    assert!(wait_until(|| a.engine.state().summary.files == 1, WAIT).await);
 
-    // Sending index data instead of asking to pair gets the connection closed.
-    conn.send(owl_core::proto::Frame::Control(
-        owl_core::proto::Control::Index {
-            entries: Vec::new(),
-        },
-    ))
-    .await
-    .unwrap();
-    let closed = tokio::time::timeout(Duration::from_secs(10), async {
-        while let Some(frame) = rx.recv().await {
-            eprintln!("stranger received {frame:?}");
-        }
-    })
-    .await;
-    assert!(closed.is_ok(), "alpha closed the connection");
+    let mut raw = raw_dial(&a, "Stranger").await;
+    // Sync data instead of a pairing request: a tombstone for a file that
+    // exists, from a device alpha never paired with.
+    let mut tomb = wire_entry("keep.txt", EntryKind::File, None, 0, &raw.identity.id);
+    tomb.deleted = true;
+    tomb.vv.insert(raw.identity.id.clone(), 5);
+    raw.conn
+        .send(Frame::Control(Control::Index {
+            entries: vec![tomb],
+        }))
+        .await
+        .unwrap();
+    match next_control(&mut raw, WAIT).await {
+        Some(Control::PairReject { reason }) => assert_eq!(reason, "not paired"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(next_control(&mut raw, WAIT).await.is_none(), "alpha closes");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        a.read("keep.txt").as_deref(),
+        Some(b"still here".as_slice())
+    );
     let state = a.engine.state();
     assert!(state.peers.is_empty());
     assert!(state.pending_pairing.is_none());
+    assert_eq!(state.summary.files, 1);
+
+    a.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mismatched_reveal_is_rejected() {
+    let a = start("Alpha").await;
+    let mut raw = raw_dial(&a, "Liar").await;
+    let committed = pairing::random_nonce();
+    let revealed = pairing::random_nonce();
+    raw.conn
+        .send(Frame::Control(Control::PairRequest {
+            id: raw.identity.id.clone(),
+            name: "Liar".into(),
+            kind: DeviceKind::Phone,
+            commit: pairing::commitment(&committed),
+        }))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_control(&mut raw, WAIT).await,
+        Some(Control::PairChallenge { .. })
+    ));
+    raw.conn
+        .send(Frame::Control(Control::PairReveal {
+            nonce: pairing::nonce_to_hex(&revealed),
+        }))
+        .await
+        .unwrap();
+    match next_control(&mut raw, WAIT).await {
+        Some(Control::PairReject { reason }) => assert!(reason.contains("commitment"), "{reason}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    assert!(next_control(&mut raw, WAIT).await.is_none(), "alpha closes");
+    assert!(a.engine.state().pending_pairing.is_none());
+    assert!(a.engine.state().peers.is_empty());
+
+    // The address is cooling down: the next request is refused at once.
+    let mut again = raw_dial(&a, "Liar").await;
+    again
+        .conn
+        .send(Frame::Control(Control::PairRequest {
+            id: again.identity.id.clone(),
+            name: "Liar".into(),
+            kind: DeviceKind::Phone,
+            commit: pairing::commitment(&committed),
+        }))
+        .await
+        .unwrap();
+    match next_control(&mut again, WAIT).await {
+        Some(Control::PairReject { reason }) => assert!(reason.contains("moment"), "{reason}"),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    a.engine.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hostile_entries_never_touch_the_disk() {
+    let a = start("Alpha").await;
+    let outside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), a.path("link")).unwrap();
+    let mut raw = raw_pair(&a, "Hostile").await;
+    let me = raw.identity.id.clone();
+
+    let entries = vec![
+        wire_entry("x.bin", EntryKind::File, Some("../../../escape/"), 5, &me),
+        wire_entry(
+            "y.bin",
+            EntryKind::File,
+            Some(&"\u{20ac}".repeat(6)),
+            5,
+            &me,
+        ),
+        wire_entry("z.bin", EntryKind::File, None, 5, &me),
+        wire_entry(
+            "link/escaped.txt",
+            EntryKind::File,
+            Some(&blake3_hex(b"secret")),
+            6,
+            &me,
+        ),
+        wire_entry("link/sub", EntryKind::Dir, None, 0, &me),
+        wire_entry("d", EntryKind::Dir, Some(&blake3_hex(b"x")), 0, &me),
+    ];
+    raw.conn
+        .send(Frame::Control(Control::IndexUpdate { entries }))
+        .await
+        .unwrap();
+
+    let got = next_control(&mut raw, Duration::from_millis(1500)).await;
+    assert!(
+        !matches!(got, Some(Control::Request { .. })),
+        "alpha asked for bytes: {got:?}"
+    );
+    assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+    let mut names = a.files();
+    names.retain(|n| n != "link");
+    assert!(names.is_empty(), "{names:?}");
+    assert!(a
+        .path("link")
+        .symlink_metadata()
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert!(
+        wait_until(
+            || a.engine.state().errors.iter().any(|e| e.contains("link/")),
+            WAIT
+        )
+        .await,
+        "{:?}",
+        a.engine.state().errors
+    );
+    assert_eq!(a.engine.state().summary.files, 0);
 
     a.engine.shutdown().await;
 }
@@ -513,19 +738,33 @@ async fn unpaired_peer_is_refused() {
 async fn forget_peer_disconnects_and_refuses() {
     let a = start("Alpha").await;
     let b = start("Beta").await;
-    pair(&a, &b).await;
+    // Beta dials, so it knows alpha's listening address and will redial it.
+    pair(&b, &a).await;
 
     a.engine.forget_peer(&b.id()).await.unwrap();
     assert!(a.engine.state().peers.is_empty());
     assert!(wait_until(|| !connected_to(&b.engine, &a.id()), WAIT).await);
     assert!(a.engine.forget_peer(&b.id()).await.is_err());
 
-    // Beta keeps redialling; nothing it sends gets through any more.
+    // Beta redials, alpha answers "not paired", and beta drops the pairing
+    // too instead of trying forever.
+    assert!(
+        wait_until(|| b.engine.state().peers.is_empty(), RECONNECT_WAIT).await,
+        "beta forgets alpha after being refused"
+    );
+    assert!(b
+        .engine
+        .state()
+        .errors
+        .iter()
+        .any(|e| e.contains("no longer trusts")));
+
     a.write("secret.txt", b"not for beta");
-    tokio::time::sleep(Duration::from_secs(7)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(!b.path("secret.txt").exists());
     assert!(a.engine.state().peers.is_empty());
     assert!(a.engine.state().pending_pairing.is_none());
+    assert!(!connected_to(&b.engine, &a.id()));
 
     a.engine.shutdown().await;
     b.engine.shutdown().await;

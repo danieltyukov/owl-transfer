@@ -19,7 +19,7 @@ use crate::clock::{mtime_ms, set_mtime_ms};
 use crate::conn::Connection;
 use crate::hash::blake3_file;
 use crate::index::Entry;
-use crate::paths::parent_of;
+use crate::paths::{parent_of, safe_abs};
 use crate::proto::{Control, Frame, BLOCK_OK, BLOCK_SIZE, BLOCK_UNAVAILABLE};
 use crate::state::{Transfer, TransferDirection, TransferSummary};
 
@@ -225,13 +225,26 @@ impl Requester {
 }
 
 /// `.owl-tmp-<hash prefix>-<random>` beside the target, so a rename into
-/// place is atomic and the scanner never indexes it.
-pub fn tmp_path(root: &Path, entry: &Entry) -> PathBuf {
-    let hash = entry.hash.as_deref().unwrap_or("nohash");
-    let prefix = &hash[..hash.len().min(16)];
+/// place is atomic and the scanner never indexes it. The directory is
+/// checked for symbolic links and only alphanumerics of the hash are used,
+/// so nothing a peer sends can steer the name.
+pub fn tmp_path(root: &Path, entry: &Entry) -> Result<PathBuf> {
+    let dir = safe_abs(root, parent_of(&entry.path))?;
+    let prefix: String = entry
+        .hash
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(16)
+        .collect();
+    let prefix = if prefix.is_empty() {
+        "nohash".to_string()
+    } else {
+        prefix
+    };
     let suffix: u32 = rand::random();
-    let dir = root.join(parent_of(&entry.path));
-    dir.join(format!(".owl-tmp-{prefix}-{suffix:08x}"))
+    Ok(dir.join(format!(".owl-tmp-{prefix}-{suffix:08x}")))
 }
 
 /// Fetches a file's bytes from the peer into a temporary file beside the
@@ -244,7 +257,7 @@ pub async fn download(
     transfers: SharedTransfers,
 ) -> Result<PathBuf> {
     let hash = entry.hash.clone().context("a file entry carries a hash")?;
-    let tmp = tmp_path(root, entry);
+    let tmp = tmp_path(root, entry)?;
     if let Some(parent) = tmp.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -353,11 +366,12 @@ async fn download_blocks(
 /// target and verifies it. `None` means the source no longer matches and
 /// the bytes must come from the network.
 pub async fn local_copy(root: &Path, source_rel: &str, entry: &Entry) -> Result<Option<PathBuf>> {
-    let tmp = tmp_path(root, entry);
+    let source = safe_abs(root, source_rel)?;
+    let tmp = tmp_path(root, entry)?;
     if let Some(parent) = tmp.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    if let Err(e) = tokio::fs::copy(root.join(source_rel), &tmp).await {
+    if let Err(e) = tokio::fs::copy(&source, &tmp).await {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(e.into());
     }
@@ -400,7 +414,9 @@ pub async fn serve_request(
     if served.hash != hash || len > BLOCK_SIZE || offset + len as u64 > served.size {
         return unavailable;
     }
-    let abs = root.join(path);
+    let Ok(abs) = safe_abs(root, path) else {
+        return unavailable;
+    };
     let Ok(md) = tokio::fs::metadata(&abs).await else {
         return unavailable;
     };
@@ -446,12 +462,91 @@ mod tests {
 
     #[test]
     fn tmp_path_is_ignored_and_beside_the_target() {
+        let dir = tempfile::tempdir().unwrap();
         let e = entry("docs/a.txt", b"x", 0);
-        let p = tmp_path(Path::new("/root"), &e);
-        assert_eq!(p.parent(), Some(Path::new("/root/docs")));
+        let p = tmp_path(dir.path(), &e).unwrap();
+        assert_eq!(p.parent(), Some(dir.path().join("docs").as_path()));
         let name = p.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with(".owl-tmp-"));
         assert!(crate::ignore::is_ignored(&format!("docs/{name}")));
+    }
+
+    #[tokio::test]
+    async fn hostile_hash_cannot_escape_or_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("src.bin"), b"bytes").unwrap();
+
+        let mut escaping = entry("x.bin", b"bytes", 0);
+        escaping.hash = Some("../../../escape/".to_string());
+        let p = tmp_path(&root, &escaping).unwrap();
+        assert_eq!(p.parent(), Some(root.as_path()));
+        assert!(p
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(".owl-tmp-escape-"));
+        assert!(local_copy(&root, "src.bin", &escaping)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!dir.path().join("escape").exists());
+        assert!(!root.join(".owl-tmp-..").exists());
+
+        let mut wide = entry("y.bin", b"bytes", 0);
+        wide.hash = Some("\u{20ac}".repeat(6));
+        let p = tmp_path(&root, &wide).unwrap();
+        assert!(p
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(".owl-tmp-nohash-"));
+        assert!(local_copy(&root, "src.bin", &wide).await.unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_symbolic_link_in_the_path_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        std::fs::write(root.join("src.bin"), b"bytes").unwrap();
+
+        let through_link = entry("link/escaped.bin", b"bytes", 0);
+        assert!(tmp_path(&root, &through_link).is_err());
+        assert!(local_copy(&root, "src.bin", &through_link).await.is_err());
+        assert!(local_copy(&root, "link/whatever", &through_link)
+            .await
+            .is_err());
+        let served = Served {
+            hash: blake3_hex(b"bytes"),
+            size: 5,
+            mtime_ms: 0,
+        };
+        let answer = serve_request(
+            &root,
+            Some(served.clone()),
+            1,
+            "link/escaped.bin",
+            &served.hash,
+            0,
+            5,
+        )
+        .await;
+        assert!(matches!(
+            answer,
+            Frame::Block {
+                status: BLOCK_UNAVAILABLE,
+                ..
+            }
+        ));
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
     }
 
     #[tokio::test]

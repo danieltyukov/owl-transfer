@@ -2,7 +2,8 @@
 //! exchange, the per-peer frame loop, block serving and the download worker.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,8 +18,11 @@ use super::Engine;
 use crate::clock::now_ms;
 use crate::config::DEFAULT_TCP_PORT;
 use crate::conn::{self, Connection};
+use crate::hash::is_hex_hash;
 use crate::index::Entry;
-use crate::pairing::{nonce_from_hex, nonce_to_hex, pairing_code, random_nonce};
+use crate::pairing::{
+    commitment, nonce_from_hex, nonce_to_hex, pairing_code, random_nonce, verify_commitment,
+};
 use crate::peers::PeerRecord;
 use crate::proto::{Control, Frame, INDEX_CHUNK};
 use crate::state::PairingDirection;
@@ -29,12 +33,40 @@ const PAIR_REQUEST_WAIT: Duration = Duration::from_secs(5);
 /// How long the person has to accept.
 const PAIR_DECISION_WAIT: Duration = Duration::from_secs(60);
 const CHALLENGE_WAIT: Duration = Duration::from_secs(10);
+/// After a declined, mismatched or timed-out request an address waits
+/// this long before it may ask again.
+const PAIR_COOLDOWN_MS: i64 = 10_000;
+/// Connections that have not proven a pairing, counted across all
+/// addresses.
+const MAX_UNAUTHENTICATED: usize = 32;
 const DOWNLOAD_ATTEMPTS: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Counts a connection that has not proven a pairing while it lives.
+struct UnauthGuard(Engine);
+
+impl Drop for UnauthGuard {
+    fn drop(&mut self) {
+        self.0
+            .shared()
+            .unauthenticated
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// An accepted TCP connection: paired peers go straight to sync, anyone
 /// else has a few seconds to ask to pair.
 pub(crate) async fn handle_incoming(engine: Engine, tcp: TcpStream) {
+    let counted = engine
+        .shared()
+        .unauthenticated
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let guard = UnauthGuard(engine.clone());
+    if counted > MAX_UNAUTHENTICATED {
+        debug!("too many unauthenticated connections; dropping one");
+        return;
+    }
     let hello = engine.hello();
     let (conn, rx) =
         match conn::accept(&engine.shared().identity, engine.trusted_fn(), tcp, hello).await {
@@ -45,9 +77,11 @@ pub(crate) async fn handle_incoming(engine: Engine, tcp: TcpStream) {
             }
         };
     if conn.trusted {
+        drop(guard);
         run_peer(engine, conn, rx).await;
     } else {
         incoming_pairing(engine, conn, rx).await;
+        drop(guard);
     }
 }
 
@@ -74,9 +108,15 @@ pub(crate) async fn dial_peer(engine: Engine, peer_id: String, addr: SocketAddr)
     }
 }
 
-/// Dials an address to pair. Returns once the code is known and shown in
-/// the state, or with an error; the rest of the exchange runs on its own.
-pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()> {
+/// Dials an address to pair. `expected_id` is the device the person chose
+/// from the nearby list; whoever else answers is refused. Returns once the
+/// code is known and shown in the state, or with an error; the rest of the
+/// exchange runs on its own.
+pub(crate) async fn pair_outgoing(
+    engine: Engine,
+    addr: SocketAddr,
+    expected_id: Option<String>,
+) -> Result<()> {
     if engine.lock().await.pending.is_some() {
         bail!("another pairing is in progress");
     }
@@ -84,6 +124,10 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
     let (conn, mut rx) = conn::dial(&identity, engine.trusted_fn(), addr, engine.hello())
         .await
         .with_context(|| format!("connecting to {addr}"))?;
+    if expected_id.is_some_and(|id| id != conn.peer_id) {
+        conn.close();
+        bail!("the device at {addr} is not the one you chose");
+    }
     if conn.trusted {
         // Already paired with whoever answered: nothing to do but sync.
         tokio::spawn(run_peer(engine, conn, rx));
@@ -91,13 +135,15 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
     }
 
     let settings = engine.settings();
+    let nonce_mine = random_nonce();
     conn.send(Frame::Control(Control::PairRequest {
         id: identity.id.clone(),
         name: settings.device_name,
         kind: engine.shared().kind,
+        commit: commitment(&nonce_mine),
     }))
     .await?;
-    let nonce = match timeout(CHALLENGE_WAIT, rx.recv()).await {
+    let nonce_theirs = match timeout(CHALLENGE_WAIT, rx.recv()).await {
         Ok(Some(Frame::Control(Control::PairChallenge { nonce }))) => nonce,
         Ok(Some(Frame::Control(Control::PairReject { reason }))) => {
             conn.close();
@@ -112,8 +158,12 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
             bail!("{} did not answer", conn.peer_name);
         }
     };
-    let nonce = nonce_from_hex(&nonce).context("malformed pairing challenge")?;
-    let code = pairing_code(&nonce, &conn.peer_id, &identity.id);
+    let nonce_theirs = nonce_from_hex(&nonce_theirs).context("malformed pairing challenge")?;
+    conn.send(Frame::Control(Control::PairReveal {
+        nonce: nonce_to_hex(&nonce_mine),
+    }))
+    .await?;
+    let code = pairing_code(&nonce_theirs, &nonce_mine, &conn.peer_id, &identity.id);
     {
         let mut inner = engine.lock().await;
         if inner.pending.is_some() {
@@ -179,11 +229,40 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
     Ok(())
 }
 
+async fn reject(conn: &Connection, reason: &str) {
+    let _ = conn
+        .send(Frame::Control(Control::PairReject {
+            reason: reason.to_string(),
+        }))
+        .await;
+    conn.close();
+}
+
+async fn cool_down(engine: &Engine, ip: IpAddr) {
+    engine
+        .lock()
+        .await
+        .pairing_cooldown
+        .insert(ip, now_ms() + PAIR_COOLDOWN_MS);
+}
+
 /// The acceptor's side of the exchange.
 async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiver<Frame>) {
     let request = timeout(PAIR_REQUEST_WAIT, rx.recv()).await;
-    let (id, name, kind) = match request {
-        Ok(Some(Frame::Control(Control::PairRequest { id, name, kind }))) => (id, name, kind),
+    let (id, name, kind, commit) = match request {
+        Ok(Some(Frame::Control(Control::PairRequest {
+            id,
+            name,
+            kind,
+            commit,
+        }))) => (id, name, kind, commit),
+        Ok(Some(_)) => {
+            // A device we no longer hold a pairing for is talking sync at
+            // us. Say so, so it stops trying.
+            debug!("unpaired {} sent sync data; refusing", conn.peer_id);
+            reject(&conn, "not paired").await;
+            return;
+        }
         _ => {
             debug!("unpaired {} sent no pairing request; closing", conn.peer_id);
             conn.close();
@@ -191,23 +270,53 @@ async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiv
         }
     };
     if id != conn.peer_id {
-        conn.close();
+        reject(&conn, "id does not match the certificate").await;
+        return;
+    }
+    let ip = conn.addr.ip();
+    let cooling = engine
+        .lock()
+        .await
+        .pairing_cooldown
+        .get(&ip)
+        .is_some_and(|until| *until > now_ms());
+    if cooling {
+        reject(&conn, "try again in a moment").await;
         return;
     }
 
     let identity = engine.shared().identity.clone();
-    let nonce = random_nonce();
-    let code = pairing_code(&nonce, &identity.id, &conn.peer_id);
+    let nonce_mine = random_nonce();
+    if conn
+        .send(Frame::Control(Control::PairChallenge {
+            nonce: nonce_to_hex(&nonce_mine),
+        }))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let nonce_theirs = match timeout(CHALLENGE_WAIT, rx.recv()).await {
+        Ok(Some(Frame::Control(Control::PairReveal { nonce }))) => nonce_from_hex(&nonce),
+        _ => None,
+    };
+    let Some(nonce_theirs) = nonce_theirs.filter(|n| verify_commitment(n, &commit)) else {
+        debug!(
+            "{} revealed a nonce that does not match its commitment",
+            conn.peer_id
+        );
+        cool_down(&engine, ip).await;
+        reject(&conn, "commitment mismatch").await;
+        return;
+    };
+    let code = pairing_code(&nonce_mine, &nonce_theirs, &identity.id, &conn.peer_id);
+
     let (respond_tx, respond_rx) = oneshot::channel();
     {
         let mut inner = engine.lock().await;
         if inner.pending.is_some() {
-            let _ = conn
-                .send(Frame::Control(Control::PairReject {
-                    reason: "busy with another pairing".into(),
-                }))
-                .await;
-            conn.close();
+            drop(inner);
+            reject(&conn, "busy with another pairing").await;
             return;
         }
         inner.pending = Some(PendingPairing {
@@ -221,16 +330,6 @@ async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiv
         });
     }
     engine.mark_state();
-    if conn
-        .send(Frame::Control(Control::PairChallenge {
-            nonce: nonce_to_hex(&nonce),
-        }))
-        .await
-        .is_err()
-    {
-        clear_pending(&engine, &conn.peer_id).await;
-        return;
-    }
 
     // Wait for the person, answering pings meanwhile; a closed connection
     // ends the wait.
@@ -251,20 +350,12 @@ async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiv
             }
         }
         Some(false) => {
-            let _ = conn
-                .send(Frame::Control(Control::PairReject {
-                    reason: "declined".into(),
-                }))
-                .await;
-            conn.close();
+            cool_down(&engine, ip).await;
+            reject(&conn, "declined").await;
         }
         None => {
-            let _ = conn
-                .send(Frame::Control(Control::PairReject {
-                    reason: "timed out".into(),
-                }))
-                .await;
-            conn.close();
+            cool_down(&engine, ip).await;
+            reject(&conn, "timed out").await;
         }
     }
 }
@@ -288,7 +379,7 @@ async fn clear_pending(engine: &Engine, peer_id: &str) {
 
 /// The address to redial a peer at. The dialler knows the listening
 /// address; the acceptor only sees a source port, so it keeps the source
-/// IP with the default port and lets the beacon correct it later.
+/// IP with the default port and lets an authenticated dial correct it.
 fn redial_address(conn: &Connection) -> String {
     if conn.outbound {
         conn.addr.to_string()
@@ -326,6 +417,26 @@ async fn store_peer(engine: &Engine, conn: &Connection) {
     engine.mark_state();
 }
 
+/// The peer told us, on an authenticated link, that it no longer holds our
+/// pairing. Drop ours too so we stop dialling it.
+async fn forget_because_refused(engine: &Engine, conn: &Connection) {
+    let mut inner = engine.lock().await;
+    let _ = inner.peers.remove(&conn.peer_id);
+    engine
+        .shared()
+        .trusted_ids
+        .write()
+        .expect("trusted lock")
+        .remove(&conn.peer_id);
+    inner.conns.remove(&conn.peer_id);
+    inner.push_error(format!(
+        "{} no longer trusts this device. Pair again to reconnect.",
+        conn.peer_name
+    ));
+    drop(inner);
+    engine.publish_state().await;
+}
+
 /// Registers a connection to a paired peer. When two connections to the
 /// same peer exist, the one initiated by the device with the smaller id
 /// survives, so both sides keep the same one.
@@ -352,6 +463,7 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
     let worker = tokio::spawn(download_worker(
         engine.clone(),
         requester.clone(),
+        link_id,
         queue_rx,
         queue_tx.clone(),
     ));
@@ -406,7 +518,7 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
         match frame {
             Frame::Control(control) => match control {
                 Control::Index { entries } | Control::IndexUpdate { entries } => {
-                    engine.on_remote_entries(&peer_id, entries).await;
+                    engine.on_remote_entries(&peer_id, link_id, entries).await;
                 }
                 Control::Request {
                     req_id,
@@ -418,6 +530,7 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
                     tokio::spawn(serve(
                         engine.clone(),
                         conn.clone(),
+                        link_id,
                         req_id,
                         path,
                         hash,
@@ -429,6 +542,11 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
                     let _ = conn.send(Frame::Control(Control::Pong)).await;
                 }
                 Control::Pong => {}
+                Control::PairReject { reason } => {
+                    warn!("{} refused this device: {reason}", conn.peer_name);
+                    forget_because_refused(&engine, &conn).await;
+                    break;
+                }
                 Control::Error { message } => warn!("{}: {message}", conn.peer_name),
                 other => warn!("unexpected {other:?} from {}", conn.peer_name),
             },
@@ -461,9 +579,11 @@ impl Engine {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn serve(
     engine: Engine,
     conn: Connection,
+    link_id: u64,
     req_id: u64,
     path: String,
     hash: String,
@@ -473,17 +593,25 @@ async fn serve(
     let settings = engine.settings();
     let served = {
         let inner = engine.lock().await;
-        inner
-            .index
-            .get(&path)
-            .filter(|e| e.is_live_file())
-            .and_then(|e| {
-                e.hash.as_ref().map(|h| Served {
-                    hash: h.clone(),
-                    size: e.size,
-                    mtime_ms: e.mtime_ms,
+        let still_linked = inner
+            .conns
+            .get(&conn.peer_id)
+            .is_some_and(|l| l.link_id == link_id);
+        if !still_linked || !is_hex_hash(&hash) {
+            None
+        } else {
+            inner
+                .index
+                .get(&path)
+                .filter(|e| e.is_live_file())
+                .and_then(|e| {
+                    e.hash.as_ref().map(|h| Served {
+                        hash: h.clone(),
+                        size: e.size,
+                        mtime_ms: e.mtime_ms,
+                    })
                 })
-            })
+        }
     };
     let total = served.as_ref().map(|s| s.size).unwrap_or(0);
     let frame =
@@ -510,12 +638,13 @@ async fn serve(
 async fn download_worker(
     engine: Engine,
     requester: Arc<Requester>,
+    link_id: u64,
     mut queue: mpsc::UnboundedReceiver<Entry>,
     requeue: mpsc::UnboundedSender<Entry>,
 ) {
     let mut attempts: HashMap<String, u32> = HashMap::new();
     while let Some(entry) = queue.recv().await {
-        match engine.fetch_entry(&requester, entry.clone()).await {
+        match engine.fetch_entry(&requester, link_id, entry.clone()).await {
             Ok(()) => {
                 attempts.remove(&entry.path);
             }

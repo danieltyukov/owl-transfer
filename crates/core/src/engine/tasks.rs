@@ -33,7 +33,7 @@ pub(crate) fn spawn_all(
     listener: TcpListener,
     watch_rx: mpsc::Receiver<Vec<String>>,
     beacon_rx: mpsc::Receiver<Heard>,
-    retry_rx: mpsc::UnboundedReceiver<(String, Entry)>,
+    retry_rx: mpsc::UnboundedReceiver<(String, u64, Entry)>,
 ) {
     let mut tasks = engine.shared().tasks.lock().expect("tasks lock");
     tasks.push(tokio::spawn(listener_loop(engine.clone(), listener)));
@@ -47,12 +47,17 @@ pub(crate) fn spawn_all(
     tasks.push(tokio::spawn(tombstone_retry_loop(engine.clone(), retry_rx)));
 }
 
-async fn tombstone_retry_loop(engine: Engine, mut rx: mpsc::UnboundedReceiver<(String, Entry)>) {
-    while let Some((peer_id, entry)) = rx.recv().await {
+async fn tombstone_retry_loop(
+    engine: Engine,
+    mut rx: mpsc::UnboundedReceiver<(String, u64, Entry)>,
+) {
+    while let Some((peer_id, link_id, entry)) = rx.recv().await {
         let engine = engine.clone();
         tokio::spawn(async move {
             tokio::time::sleep(TOMBSTONE_RETRY_DELAY).await;
-            engine.on_remote_entries(&peer_id, vec![entry]).await;
+            engine
+                .on_remote_entries(&peer_id, link_id, vec![entry])
+                .await;
         });
     }
 }
@@ -81,10 +86,11 @@ async fn beacon_consumer(engine: Engine, mut rx: mpsc::Receiver<Heard>) {
     while let Some(heard) = rx.recv().await {
         let settings = engine.settings();
         let mut inner = engine.lock().await;
+        // Beacons are unauthenticated, so they only steer the next dial;
+        // the stored address is written after an authenticated connection.
         let paired = inner.peers.contains(&heard.id);
         if paired {
             inner.peers.set_last_seen(&heard.id, heard.at_ms);
-            let _ = inner.peers.set_address(&heard.id, heard.addr.to_string());
         }
         let changed = inner.nearby.get(&heard.id).is_none_or(|old| {
             old.name != heard.name || old.addr != heard.addr || old.kind != heard.kind
