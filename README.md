@@ -57,8 +57,10 @@ Downloads are on the
 allow installs from your browser, once. The app then asks for the All files
 access permission, which is what lets the sync folder live at
 `/storage/emulated/0/OwlTransfer` where every other app can see it; sync stays
-paused until you grant it. The APK is signed with a key that is not Google's,
-so an update installs over the top only if it came from the same place.
+paused until you grant it. Releases from this repository are signed with the
+maintainer's key, which is not Google's, so an update installs over the top
+only if it came from the same place. A fork that builds without the signing
+secrets gets an unsigned APK instead, and `SECURITY.md` says what that means.
 
 **Linux.** `owl-transfer_x86_64.AppImage` runs anywhere: `chmod +x` it and run
 it. `owl-transfer_amd64.deb` is there for Debian and Ubuntu, installed with
@@ -87,11 +89,10 @@ Put both devices on the same Wi-Fi, then:
    finished switching windows.
 
 If Nearby stays empty, the network is blocking traffic between its clients,
-which guest and hotel Wi-Fi usually do. Use Pair by address instead: the
-Devices screen shows each device's own address and port at the bottom, and
-typing one of them into the other device is enough. Only one side has to be
-able to dial, because the connection then carries the folder in both
-directions.
+which guest and hotel Wi-Fi usually do. Use Pair by address instead: at the
+bottom of the Devices screen each device shows its own addresses and port,
+which is what you type on the other one. Only one side has to be able to dial,
+because the connection then carries the folder in both directions.
 
 Changes the phone makes itself are indexed immediately. A change made by
 another app in shared storage can take up to two seconds to be noticed, because

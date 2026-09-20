@@ -11,8 +11,8 @@ This is one person's side project with no service behind it and no on-call
 rotation. Expect a reply in days, not hours. There is no bounty.
 
 If the report is about your own installation rather than about this code, act
-first and report second. Forgetting a peer in Settings stops that device
-connecting from the next attempt onward, and deleting the data directory
+first and report second. Forgetting a peer on the Devices screen stops that
+device connecting from the next attempt onward, and deleting the data directory
 destroys the certificate the device was identified by. Neither needs anybody
 else's cooperation, because there is no account and no server holding anything
 on your behalf.
@@ -34,7 +34,8 @@ directory on Android.
 There is no account, no token, no password and no telemetry. Nothing is
 uploaded anywhere, because there is nowhere for it to go: the only network
 traffic this app makes is a UDP broadcast on your own network advertising that
-it exists, and TLS connections to devices you have paired with.
+it exists, and TLS connections to devices you have paired with and to a device
+you are in the middle of pairing with.
 
 Anyone who can read the data directory holds the private key and can act as
 that device until the peer forgets it. That is the same exposure as an SSH key
@@ -79,7 +80,7 @@ and it is worth being deliberate about which devices you pair.
 
 ## Android permissions
 
-The app requests these, and each one is doing something specific:
+The manifest declares six, and each one is doing something specific:
 
 | Permission | Why |
 | --- | --- |
@@ -87,6 +88,14 @@ The app requests these, and each one is doing something specific:
 | `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` | Knowing which interfaces exist, to send the discovery beacon to the right broadcast addresses |
 | `CHANGE_WIFI_MULTICAST_STATE` | Taking a `MulticastLock`. Without it the Wi-Fi driver drops incoming broadcasts and the phone never sees another device |
 | `MANAGE_EXTERNAL_STORAGE` | Reading and writing the sync folder at `/storage/emulated/0/OwlTransfer`, where every file manager can see it |
+| `READ_EXTERNAL_STORAGE`, capped at API 32 | The same folder on Android 12 and older, which predate the permission above |
+| `WRITE_EXTERNAL_STORAGE`, capped at API 29 | The same, on Android 10 and older |
+
+The last two carry `android:maxSdkVersion`, so the system stops granting them
+above those levels. On a phone running anything current they are inert: they do
+not appear in the app's permission list and they are never requested. They are
+there because the app supports back to API 26, where the storage model was the
+older one.
 
 `MANAGE_EXTERNAL_STORAGE` is the broad one and it deserves the explanation.
 Android grants it through a system settings screen rather than a dialog, and it
@@ -124,9 +133,20 @@ private storage.
 
 The desktop installers are not code-signed. Windows SmartScreen will warn once
 on the NSIS installer, and there is nothing this project can do about that
-short of buying a certificate. The APK is signed, with a key that is not
-Google's, so an update installs over the top only if it came from the same
-place.
+short of buying a certificate.
+
+Releases cut from this repository are signed with the maintainer's key, which
+is not Google's, so an update installs over an existing one only if it came
+from the same place.
+
+A build made without the signing secrets, which is what a fork gets, produces
+an unsigned APK under the same asset name rather than failing the job, and the
+run carries a warning saying so. Sign it yourself before handing it to a phone,
+because Android refuses an APK with no signature at all. Once it is signed with
+a different key it is still not interchangeable with a release from here: an
+APK signed by one key cannot install over one signed by another, in either
+direction. Crossing between them means uninstalling, which destroys the data
+directory and with it the device's identity and its pairings.
 
 ## Scope
 

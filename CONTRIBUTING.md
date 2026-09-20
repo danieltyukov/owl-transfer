@@ -41,7 +41,7 @@ npm test              # vitest, against the mock backend
 npm run test:e2e      # playwright, against the production build
 cargo test -p owl-core
 cargo clippy -p owl-core --all-targets -- -D warnings
-cargo fmt --check
+cargo fmt --all --check
 ```
 
 Neither suite needs a device, a network or a build step first. The engine's
@@ -115,8 +115,10 @@ stays permanently empty, and it copies shared files into the sync folder.
 
 ## Two instances on one machine
 
-The engine reads four environment overrides, which exist so that sync can be
-exercised without a second device:
+The engine itself reads no environment, because it takes a `Config` and that is
+the seam described above. The Tauri shell's settings module,
+`app/src-tauri/src/settings.rs`, reads four overrides and passes them into that
+`Config`, so that sync can be exercised without a second device:
 
 | Variable | Default | What it does |
 | --- | --- | --- |
@@ -180,7 +182,7 @@ messages or documentation.
 ## CI
 
 `.github/workflows/ci.yml` runs on every push and pull request, in three jobs.
-`rust` runs `cargo fmt --check`, clippy with warnings denied, the engine tests
+`rust` runs `cargo fmt --all --check`, clippy with warnings denied, the engine tests
 and the Windows cross-check. `web` runs the typecheck, the unit tests, the app
 build and the Playwright smoke. `site` builds the site, which is a separate job
 because the site imports `app/src/tokens.css` from outside its own root:

@@ -45,9 +45,13 @@ figure {
   margin: 0;
 }
 
+/* The underline is the only thing marking a link, since the colour is
+   inherited, so it has to carry on its own. --border-strong is a hairline
+   token: 1.45:1 on the light ground, which is a line nobody can see. --muted is
+   the faintest token that still reads as a mark rather than a smudge. */
 a {
   color: inherit;
-  text-decoration-color: var(--border-strong);
+  text-decoration-color: var(--muted);
   text-underline-offset: 0.18em;
 }
 
@@ -232,6 +236,10 @@ code {
   padding: 0 24px;
 }
 
+/* Deliberately no `display` here. The theme rules below set it per image, and
+   a `display` on `.shot img` would outrank `.shot-dark { display: none }`,
+   which is one class against one class and one type, and render both
+   screenshots at once in the light theme. */
 .shot img {
   width: 100%;
   height: auto;
@@ -254,13 +262,13 @@ code {
     display: none;
   }
 
+  /* A phone screenshot is portrait: full width it would be taller than most
+     screens and read as a wall rather than a picture of an app. The cap and
+     the centring are on the wrapper rather than on the image, because the
+     wrapper is a div and is block-level whatever the theme rules do to the
+     images inside it. */
   .shot-narrow {
     display: block;
-  }
-
-  /* A phone screenshot is portrait: full width it would be taller than most
-     screens and read as a wall rather than a picture of an app. */
-  .shot img {
     max-width: 360px;
     margin: 0 auto;
   }

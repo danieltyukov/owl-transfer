@@ -363,7 +363,7 @@ about two seconds.
 
 ## What is stored where
 
-The data directory holds four files:
+The app keeps its own state in one directory, which differs per platform:
 
 | Platform | Directory |
 | --- | --- |
@@ -371,7 +371,7 @@ The data directory holds four files:
 | Windows | `%APPDATA%\com.owltransfer.app\` |
 | Android | the app's private files directory |
 
-`device.json` is the certificate and its private key. It is the device's
+Four files live in it. `device.json` is the certificate and its private key. It is the device's
 identity and the only thing in here that is a secret. `peers.json` is the list
 of fingerprints this device trusts, with each peer's name, kind and last known
 address. `index.json` is the index described above, which means it is a

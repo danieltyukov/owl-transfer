@@ -14,7 +14,7 @@ devices, a phone, a large file, a network that drops.
   npm run test:e2e
   cargo test -p owl-core
   cargo clippy -p owl-core --all-targets -- -D warnings
-  cargo fmt --check
+  cargo fmt --all --check
 -->
 
 ## Notes

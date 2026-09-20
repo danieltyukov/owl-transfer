@@ -64,7 +64,10 @@
       </div>
     </header>
 
-    <main id="main">
+    <!-- tabindex="-1" so the skip link moves keyboard focus and not just the
+         viewport. Without it some browsers scroll here and leave focus on the
+         link, so the next Tab goes back into the header. -->
+    <main id="main" tabindex="-1">
       <div class="wrap">
         <p class="lede">
           A folder that is the same on your computer and your phone. Drop a file in on one and it
@@ -104,8 +107,9 @@
         Two sizes, two themes, one image shown. The desktop shot is 2880px wide
         and is a picture of a shape rather than something anyone can read once
         the column is narrower than about 760px, so below that the phone shot
-        takes over. Each of the four carries its own alt, because what the
-        reader is missing genuinely differs between the two layouts.
+        takes over. One alt per layout, repeated across that layout's light and
+        dark pair, because what the reader is missing genuinely differs between
+        the desktop and the phone.
       -->
       <figure class="shot">
         <div class="shot-wide">
@@ -183,7 +187,7 @@
           </p>
           <p>
             After that the two remember each other and reconnect on their own whenever they are on
-            the same network. Forget a device in Settings and its certificate stops being trusted,
+            the same network. Forget a device on the Devices screen and its certificate stops being trusted,
             so the next connection from it is refused. If the network blocks broadcasts, or you
             are pairing against an emulator, type the other device's address instead: one side
             dialling is enough, and the connection carries the folder in both directions.
