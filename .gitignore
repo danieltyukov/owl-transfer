@@ -28,6 +28,8 @@ keystore.properties
 
 # Test output
 app/playwright-report/
+__pycache__/
+.pytest_cache/
 app/test-results/
 node_modules/.cache/
 

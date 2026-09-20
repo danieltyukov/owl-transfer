@@ -1,0 +1,7 @@
+# The desktop end to end suite. Python 3.11 or newer.
+#
+# Not part of `npm test` and not installed by `npm ci`: this suite starts two
+# real windows and needs a desktop session, so it is run by hand or by a job
+# that has one.
+pytest>=8.0
+selenium>=4.41
