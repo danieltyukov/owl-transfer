@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.provider.Settings
 import android.util.Log
@@ -29,11 +28,11 @@ import app.tauri.plugin.Plugin
 @TauriPlugin
 class OwlPlugin(private val activity: Activity) : Plugin(activity) {
 
-  /** "granted" or "denied". A phone too old to have the permission has it. */
+  /** "granted" or "denied". minSdk is 30, so the permission always exists. */
   @Command
   fun allFilesPermission(invoke: Invoke) {
     val result = JSObject()
-    result.put("state", if (hasAllFilesAccess()) "granted" else "denied")
+    result.put("state", if (Environment.isExternalStorageManager()) "granted" else "denied")
     invoke.resolve(result)
   }
 
@@ -45,13 +44,6 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
    */
   @Command
   fun openAllFilesSettings(invoke: Invoke) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-      // Before Android 11 there is no such screen, and no such permission to
-      // grant: WRITE_EXTERNAL_STORAGE already covers the folder.
-      invoke.resolve(JSObject())
-      return
-    }
-
     val target = Intent(
       Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
       Uri.fromParts("package", activity.packageName, null),
@@ -71,9 +63,6 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
     }
     invoke.resolve(JSObject())
   }
-
-  private fun hasAllFilesAccess(): Boolean =
-    Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
   private companion object {
     const val TAG = "owl-transfer"

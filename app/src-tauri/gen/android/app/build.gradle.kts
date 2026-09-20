@@ -19,10 +19,17 @@ android {
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.owltransfer.app"
-        // 26 because the app asks for MANAGE_EXTERNAL_STORAGE and uses the
-        // adaptive launcher icon, and because a device older than Android 8 is
-        // not a device anyone is syncing a folder to in 2026.
-        minSdk = 26
+        // 30 because the sync folder lives in shared storage and the only
+        // permission that reaches it there is MANAGE_EXTERNAL_STORAGE, which
+        // arrived in Android 11. Below that the app would have to ask for
+        // WRITE_EXTERNAL_STORAGE at runtime and answer a different question
+        // about whether storage is reachable, for four Android versions nobody
+        // is syncing a folder to in 2026.
+        //
+        // This is the belt to the braces: tauri.conf.json carries
+        // bundle.android.minSdkVersion, which survives a `tauri android init`
+        // rewriting this generated file. Keep the two in step.
+        minSdk = 30
         // 35 rather than the compileSdk. Android 15 is what the emulator here
         // runs and what the release is tested against; moving the target is a
         // behaviour change, so it moves on purpose rather than with the

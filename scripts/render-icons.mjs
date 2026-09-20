@@ -37,6 +37,15 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+try {
+  execFileSync('rsvg-convert', ['--version'], { stdio: 'ignore' });
+} catch {
+  console.error('This script needs rsvg-convert (librsvg) on the PATH.');
+  console.error('Debian and Ubuntu: sudo apt install librsvg2-bin');
+  console.error('Fedora: sudo dnf install librsvg2-tools. macOS: brew install librsvg');
+  process.exit(1);
+}
+
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const res = join(repo, 'app/src-tauri/gen/android/app/src/main/res');
 const cache = join(repo, 'node_modules/.cache/owl-transfer-icons');
@@ -61,17 +70,24 @@ const INK = '#111214';
 /**
  * Where the face sits on a 1024 canvas.
  *
- * The launcher is masked: Android crops the 108dp canvas to a circle, a
- * squircle or a rounded square depending on the launcher, and only the central
- * 66% is safe on all of them. The face is 24.2 grid units across, so a scale of
- * 23 puts it at 556px, comfortably inside that 626px safe square, centred on
- * 512 and lifted a couple of pixels because a beak points down and a face
- * centred by its bounding box reads as sinking.
+ * The launcher is masked. Android crops the 108dp canvas to a circle, a
+ * squircle or a rounded square depending on the launcher, and the only region
+ * guaranteed on all of them is the central 66dp circle, radius 33 of 54.
+ *
+ * The binding point is a brow tip, grid (5,11), whose round cap adds half the
+ * 2.2 stroke. At scale 22, with the face centre 1.3dp above the icon centre,
+ * that tip lands 31.1dp from the centre against the 33dp radius: just under 2dp
+ * of margin. Scale 23 left 0.6dp, which is inside but gives a future tweak to
+ * the brow no room at all. The face is 532px across here, just over half the
+ * tile.
+ *
+ * The lift exists because a beak points down, and a face centred on its
+ * bounding box reads as sinking.
  *
  * The desktop icon is not masked, so the face is larger: 653px, roughly two
  * thirds of the tile.
  */
-const LAUNCHER = { scale: 23, tx: 144, ty: 134 };
+const LAUNCHER = { scale: 22, tx: 160, ty: 150 };
 const DESKTOP = { scale: 27, tx: 80, ty: 80 };
 
 /**

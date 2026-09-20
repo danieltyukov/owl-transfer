@@ -32,8 +32,9 @@ struct PermissionResponse {
 pub struct Owl<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> Owl<R> {
-    /// "granted" or "denied". Never an error the caller has to interpret: a
-    /// phone that cannot answer has not granted anything.
+    /// "granted" or "denied", or an error when the plugin call itself failed.
+    /// A caller should read that error as "denied": a phone that cannot answer
+    /// has not granted anything.
     pub fn all_files_permission(&self) -> anyhow::Result<String> {
         let response: PermissionResponse = self.0.run_mobile_plugin("allFilesPermission", ())?;
         Ok(response.state)

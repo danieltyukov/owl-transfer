@@ -13,26 +13,39 @@
          so that every file manager and gallery on the phone can see what was
          synced. Reaching it needs all files access, the same permission every
          file manager and Syncthing hold. No runtime dialog grants it: the
-         person turns it on from a system screen, which OwlPlugin opens. -->
+         person turns it on from a system screen, which OwlPlugin opens.
+
+         This is the only storage permission declared, and it is the reason
+         minSdk is 30. Before Android 11 there was no all files access, so the
+         app would have had to request WRITE_EXTERNAL_STORAGE at runtime and
+         answer a different question about whether the folder is reachable. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
-    <!-- Android 12 and older had no all files access, so the older pair is
-         still declared for those versions. -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Nothing this app stores may leave the device.
+
+         The data directory holds the engine's private key, and its SHA-256
+         fingerprint is the device id that every paired peer pins. A backup
+         restored onto a second phone would clone that identity and put two
+         devices on the network presenting the same fingerprint, which is the
+         one thing the trust model cannot survive.
+
+         allowBackup="false" is not enough on its own from Android 12: it stops
+         cloud backup but not device to device transfer, so the rules file
+         excludes both. fullBackupContent covers Android 11, where the rules
+         file is not read. -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.owl_transfer"
         android:usesCleartextTraffic="${usesCleartextTraffic}"
-        android:requestLegacyExternalStorage="true">
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:launchMode="singleTask"

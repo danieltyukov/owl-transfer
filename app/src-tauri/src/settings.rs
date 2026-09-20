@@ -81,12 +81,31 @@ fn read(dir: &Path) -> Option<Settings> {
         Err(error) => {
             // Not fatal: a person who hand edited the file into something
             // unparseable gets the defaults back rather than an app that will
-            // not start, and the file is rewritten the next time anything
-            // changes.
-            tracing::warn!(?path, %error, "settings.json is not readable, using the defaults");
+            // not start. The defaults are then written over it at the next
+            // startup, so the broken file is moved aside first. It is the only
+            // record of which folder they had chosen, and one typo should not
+            // cost them that silently.
+            let kept = set_aside(&path);
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                kept = %kept.as_deref().unwrap_or("nothing, the rename failed too"),
+                "settings.json could not be parsed, keeping a copy and using the defaults"
+            );
             None
         }
     }
+}
+
+/// Renames an unparseable settings file out of the way, returning where it went.
+fn set_aside(path: &Path) -> Option<String> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or(0);
+    let kept = path.with_file_name(format!("{FILE}.corrupt-{stamp}"));
+    std::fs::rename(path, &kept).ok()?;
+    Some(kept.display().to_string())
 }
 
 /// What a device with no `settings.json` yet starts out with.
@@ -196,6 +215,33 @@ mod tests {
     #[test]
     fn a_missing_file_is_not_an_error() {
         assert_eq!(read(Path::new("/nowhere/at/all")), None);
+    }
+
+    #[test]
+    fn an_unparseable_file_is_kept() {
+        let dir = std::env::temp_dir().join(format!("owl-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("create");
+        std::fs::write(dir.join(FILE), b"{ folder: oops").expect("write");
+
+        assert_eq!(read(&dir), None);
+        assert!(
+            !dir.join(FILE).exists(),
+            "the broken file was left in place"
+        );
+
+        let kept: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(kept.len(), 1, "expected exactly one file, found {kept:?}");
+        assert!(
+            kept[0].starts_with("settings.json.corrupt-"),
+            "unexpected name {}",
+            kept[0]
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

@@ -48,6 +48,9 @@
       "deb": {
         "desktopTemplate": "owl-transfer.desktop"
       }
+    },
+    "android": {
+      "minSdkVersion": 30
     }
   }
 }
