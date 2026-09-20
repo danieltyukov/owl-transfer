@@ -1,0 +1,42 @@
+/*
+ * The three controls, at the end of the title bar.
+ *
+ * Full strip height and square, which is the shape every desktop draws them in
+ * and the reason they read as window controls rather than as three more of the
+ * app's own buttons.
+ */
+
+.window-controls {
+  display: flex;
+  align-self: stretch;
+  /* The title bar's other two children are the brand and an out-of-flow title,
+     so this is what puts the cluster at the far end. */
+  margin-inline-start: auto;
+}
+
+.window-control {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: 44px;
+  color: var(--faint);
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.window-control:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.window-control:active {
+  background-color: var(--pressed);
+}
+
+/* Close is the one that costs something to press by mistake, so it is the one
+   that says so under the pointer. Not a red fill: the glyph on it would need a
+   foreground that reads on red in both themes, and there is no such token. */
+.window-close:hover {
+  color: var(--danger);
+}
