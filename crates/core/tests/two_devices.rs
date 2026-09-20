@@ -1045,6 +1045,94 @@ async fn downloads_past_the_queue_cap_are_still_fetched() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paused_start_touches_nothing_and_syncs_after_resume() {
+    init_logging();
+    // Alpha starts paused with a folder that cannot be created: a file
+    // sits where it would go, as a phone before its storage grant.
+    let data = tempfile::tempdir().unwrap();
+    let blocker = tempfile::tempdir().unwrap();
+    let blocked = blocker.path().join("not-a-dir");
+    std::fs::write(&blocked, b"in the way").unwrap();
+    let mut cfg = config(data.path(), &blocked, "Alpha", 0);
+    cfg.paused = true;
+    let alpha = Engine::start(cfg)
+        .await
+        .expect("a paused start needs no folder");
+    assert!(alpha.state().paused);
+    assert!(blocked.is_file());
+    let alpha_id = alpha.state().device.id.clone();
+
+    // Pairing works while paused: beta dials, alpha accepts.
+    let b = start("Beta").await;
+    b.engine
+        .pair_with_address("127.0.0.1", alpha.local_port())
+        .await
+        .unwrap();
+    assert!(
+        wait_until(
+            || alpha.state().pending_pairing.is_some()
+                && b.engine.state().pending_pairing.is_some(),
+            WAIT
+        )
+        .await
+    );
+    assert_eq!(
+        alpha.state().pending_pairing.unwrap().code,
+        b.engine.state().pending_pairing.unwrap().code
+    );
+    alpha.respond_to_pairing(&b.id(), true).await.unwrap();
+    assert!(
+        wait_until(
+            || alpha.state().peers.iter().any(|p| p.id == b.id())
+                && b.engine.state().peers.iter().any(|p| p.id == alpha_id),
+            WAIT
+        )
+        .await
+    );
+    assert!(alpha.state().paused);
+    assert!(blocked.is_file(), "nothing under the folder was touched");
+    assert_eq!(std::fs::read(&blocked).unwrap(), b"in the way");
+
+    // Point the folder somewhere valid and resume: the folder is created,
+    // watched and scanned, and sync proceeds both ways.
+    let real = tempfile::tempdir().unwrap();
+    let folder = real.path().join("OwlTransfer");
+    alpha.set_folder(folder.clone()).await.unwrap();
+    alpha.set_paused(false).await;
+    assert!(!alpha.state().paused, "{:?}", alpha.state().errors);
+    assert!(folder.is_dir());
+    assert!(
+        wait_until(
+            || connected_to(&alpha, &b.id()) && connected_to(&b.engine, &alpha_id),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+    b.write("hello.txt", b"from beta");
+    assert!(
+        wait_until(
+            || std::fs::read(folder.join("hello.txt")).ok().as_deref()
+                == Some(b"from beta".as_slice()),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+    std::fs::write(folder.join("back.txt"), b"from alpha").unwrap();
+    assert!(wait_for_bytes(&b, "back.txt", b"from alpha", WAIT).await);
+
+    // A resume that cannot create its folder is reported, not fatal, and
+    // leaves the engine paused so it can be tried again.
+    alpha.set_paused(true).await;
+    alpha.set_folder(blocked.clone()).await.unwrap_err();
+    alpha.set_paused(false).await;
+    assert!(!alpha.state().paused, "the folder is still the valid one");
+    assert!(blocked.is_file());
+
+    alpha.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_and_imports_reflect_sync_status() {
     let a = start("Alpha").await;
     a.write("alone.txt", b"nobody has this yet");

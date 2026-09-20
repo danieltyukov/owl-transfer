@@ -82,8 +82,13 @@ impl Engine {
     pub async fn start(config: Config) -> Result<Engine> {
         std::fs::create_dir_all(&config.data_dir)
             .with_context(|| format!("creating {}", config.data_dir.display()))?;
-        std::fs::create_dir_all(&config.folder)
-            .with_context(|| format!("creating {}", config.folder.display()))?;
+        // A paused start (Android before the storage grant) touches nothing
+        // under the folder: identity, peers, beacon, listener and pairing
+        // all work without it, and `set_paused(false)` creates it later.
+        if !config.paused {
+            std::fs::create_dir_all(&config.folder)
+                .with_context(|| format!("creating {}", config.folder.display()))?;
+        }
         let identity = Identity::load_or_create(&config.data_dir)?;
         let (peers, peers_note) = PeerStore::load_with_note(&config.data_dir)?;
         let index_existed = config.data_dir.join("index.json").exists();
@@ -287,7 +292,10 @@ impl Engine {
     }
 
     /// Paused: no watching, scanning, dialling or syncing. Pairing still
-    /// works so a phone can pair before it has storage access.
+    /// works so a phone can pair before it has storage access. Resuming
+    /// creates the folder, starts the watcher and runs the first scan; if
+    /// any of that fails the engine stays paused and says why in `errors`,
+    /// so the person can fix the folder and try again.
     pub async fn set_paused(&self, paused: bool) {
         let was = std::mem::replace(
             &mut self.shared.settings.write().expect("settings lock").paused,
@@ -300,8 +308,21 @@ impl Engine {
             let mut inner = self.lock().await;
             inner.watcher = None;
             inner.conns.clear();
-        } else if let Err(e) = self.start_folder(None).await {
-            self.error(format!("resuming: {e:#}")).await;
+        } else {
+            let folder = self.folder();
+            let resumed = async {
+                tokio::fs::create_dir_all(&folder)
+                    .await
+                    .with_context(|| format!("creating {}", folder.display()))?;
+                self.start_folder(None).await
+            }
+            .await;
+            if let Err(e) = resumed {
+                self.shared.settings.write().expect("settings lock").paused = true;
+                let mut inner = self.lock().await;
+                inner.watcher = None;
+                inner.push_error(format!("cannot resume syncing: {e:#}"));
+            }
         }
         self.publish_state().await;
     }
