@@ -13,9 +13,39 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// The release signing material, when there is any.
+//
+// The release workflow writes keystore.properties beside settings.gradle from
+// repository secrets and deletes it again afterwards, so it exists only for the
+// length of that one build; the file and every *.jks and *.keystore are
+// gitignored. Keys: storeFile, storePassword, keyAlias, password.
+//
+// With no file the release build is left unsigned rather than failing, so a
+// fork holding no secrets, and anyone building a release locally, still gets an
+// APK. An unsigned one cannot install over a signed one, which the workflow
+// says out loud when it happens.
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.owltransfer.app"
+    signingConfigs {
+        if (keystoreProperties.containsKey("storeFile")) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                // "password" rather than "keyPassword": it is what the release
+                // workflow writes, and the two have to agree.
+                keyPassword = keystoreProperties.getProperty("password")
+            }
+        }
+    }
     defaultConfig {
         manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.owltransfer.app"
@@ -51,6 +81,9 @@ android {
             }
         }
         getByName("release") {
+            // Null when no keystore.properties was there to read, which leaves
+            // the APK unsigned.
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
