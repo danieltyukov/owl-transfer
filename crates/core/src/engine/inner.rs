@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, MutexGuard};
@@ -36,13 +37,43 @@ pub(crate) struct Settings {
     pub paused: bool,
 }
 
+/// Entries per peer that may wait for download at once. Beyond this the
+/// next index exchange or the deferred retry offers them again.
+pub(crate) const MAX_QUEUED_PER_PEER: usize = 10_000;
+
+/// A download that failed repeatedly, to be offered again later. The
+/// worker keeps the attempt count per path, so the wait keeps growing.
+pub(crate) struct Deferred {
+    pub entry: Entry,
+    pub retry_at_ms: i64,
+}
+
 /// A live connection to a paired peer with its download queue.
 pub(crate) struct PeerLink {
     pub link_id: u64,
     pub conn: Connection,
     pub requester: Arc<Requester>,
     pub queue: mpsc::UnboundedSender<Entry>,
+    /// Entries in `queue` not yet taken by the worker.
+    pub queue_len: Arc<AtomicUsize>,
+    pub deferred: Vec<Deferred>,
     pub worker: JoinHandle<()>,
+}
+
+impl PeerLink {
+    /// Queues an entry for download unless the queue is at its cap.
+    pub fn enqueue(&self, entry: Entry) -> bool {
+        if self.queue_len.load(std::sync::atomic::Ordering::Relaxed) >= MAX_QUEUED_PER_PEER {
+            return false;
+        }
+        if self.queue.send(entry).is_ok() {
+            self.queue_len
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for PeerLink {
@@ -89,6 +120,8 @@ pub(crate) struct Inner {
     pub pairing_cooldown: HashMap<IpAddr, i64>,
     /// Directories the last scans could not read, reported once each.
     pub unreadable: HashSet<String>,
+    /// When a full rescan was last triggered by a new connection.
+    pub last_connect_rescan_ms: i64,
     pub next_link_id: u64,
 }
 
@@ -111,6 +144,7 @@ impl Inner {
             addresses: crate::beacon::local_ipv4_addresses(),
             pairing_cooldown: HashMap::new(),
             unreadable: HashSet::new(),
+            last_connect_rescan_ms: 0,
             next_link_id: 1,
         }
     }

@@ -11,7 +11,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use rustls_pki_types::ServerName;
 use tokio::io::{AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tokio_rustls::{TlsAcceptor, TlsConnector, TlsStream};
 use tracing::debug;
@@ -19,7 +19,7 @@ use tracing::debug;
 use crate::clock::now_ms;
 use crate::config::DeviceKind;
 use crate::identity::Identity;
-use crate::proto::{encode, Control, Frame, FrameReader, PROTOCOL_VERSION};
+use crate::proto::{encode, Control, Frame, FrameReader, BLOCK_WINDOW, PROTOCOL_VERSION};
 use crate::tls::{self, Trusted};
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,7 +36,14 @@ pub struct Connection {
     pub outbound: bool,
     /// Whether `peer_id` was a paired peer when the handshake finished.
     pub trusted: bool,
+    /// Control frames: unbounded, so the engine never blocks on a slow
+    /// peer while holding its lock, and never starved by blocks.
     tx: mpsc::UnboundedSender<Frame>,
+    /// Blocks: bounded, so a peer that requests and never reads stalls its
+    /// own requests rather than growing our memory.
+    block_tx: mpsc::Sender<Frame>,
+    /// Requests being served for this peer, at most `BLOCK_WINDOW`.
+    serve_permits: Arc<Semaphore>,
     closer: Arc<watch::Sender<bool>>,
     last_rx_ms: Arc<AtomicI64>,
 }
@@ -53,18 +60,38 @@ impl std::fmt::Debug for Connection {
 }
 
 impl Connection {
-    /// Queues a frame. The queue is unbounded so the engine never blocks on
-    /// a slow peer while holding its lock; blocks are bounded by the
-    /// requester's window.
+    /// Queues a frame. A control frame is queued at once; a block waits
+    /// for room in the bounded block queue.
     pub async fn send(&self, frame: Frame) -> Result<()> {
-        self.try_send(frame)
+        match frame {
+            Frame::Block { .. } => self
+                .block_tx
+                .send(frame)
+                .await
+                .map_err(|_| anyhow!("connection to {} is closed", self.peer_id)),
+            Frame::Control(_) => self.try_send(frame),
+        }
     }
 
-    /// The same as `send`, for callers that cannot await.
+    /// Queues a frame without waiting. A block is refused when its queue
+    /// is full.
     pub fn try_send(&self, frame: Frame) -> Result<()> {
-        self.tx
-            .send(frame)
-            .map_err(|_| anyhow!("connection to {} is closed", self.peer_id))
+        match frame {
+            Frame::Block { .. } => self
+                .block_tx
+                .try_send(frame)
+                .map_err(|_| anyhow!("block queue to {} is full or closed", self.peer_id)),
+            Frame::Control(_) => self
+                .tx
+                .send(frame)
+                .map_err(|_| anyhow!("connection to {} is closed", self.peer_id)),
+        }
+    }
+
+    /// A permit to serve one block request, or `None` when the peer
+    /// already has `BLOCK_WINDOW` being served.
+    pub fn serve_permit(&self) -> Option<OwnedSemaphorePermit> {
+        self.serve_permits.clone().try_acquire_owned().ok()
     }
 
     pub fn close(&self) {
@@ -157,10 +184,11 @@ async fn establish(
 
     let (in_tx, in_rx) = mpsc::channel(INBOUND_QUEUE);
     let (out_tx, out_rx) = mpsc::unbounded_channel();
+    let (block_tx, block_rx) = mpsc::channel(BLOCK_WINDOW);
     let closer = Arc::new(watch::channel(false).0);
     let last_rx_ms = Arc::new(AtomicI64::new(now_ms()));
     tokio::spawn(read_loop(reader, in_tx, closer.clone(), last_rx_ms.clone()));
-    tokio::spawn(write_loop(wr, out_rx, closer.clone()));
+    tokio::spawn(write_loop(wr, out_rx, block_rx, closer.clone()));
 
     Ok((
         Connection {
@@ -171,6 +199,8 @@ async fn establish(
             outbound,
             trusted: is_trusted,
             tx: out_tx,
+            block_tx,
+            serve_permits: Arc::new(Semaphore::new(BLOCK_WINDOW)),
             closer,
             last_rx_ms,
         },
@@ -223,12 +253,14 @@ async fn read_loop(
 async fn write_loop(
     mut wr: WriteHalf<TlsStream<TcpStream>>,
     mut out_rx: mpsc::UnboundedReceiver<Frame>,
+    mut block_rx: mpsc::Receiver<Frame>,
     closer: Arc<watch::Sender<bool>>,
 ) {
     let mut closed = closer.subscribe();
     loop {
-        // Frames queued before a close still go out, so a final reject or
-        // accept reaches the peer.
+        // Control frames first, so a peer streaming blocks still gets
+        // pings, index updates and rejects promptly; then a close is
+        // honoured only once nothing is waiting.
         match out_rx.try_recv() {
             Ok(frame) => {
                 if let Err(e) = wr.write_all(&encode(&frame)).await {
@@ -240,11 +272,18 @@ async fn write_loop(
             Err(mpsc::error::TryRecvError::Empty) => {}
             Err(mpsc::error::TryRecvError::Disconnected) => break,
         }
-        // A frame that is ready goes out before a close is honoured, so a
-        // final reject or accept reaches the peer.
         tokio::select! {
             biased;
             next = out_rx.recv() => match next {
+                Some(frame) => {
+                    if let Err(e) = wr.write_all(&encode(&frame)).await {
+                        debug!("connection write ended: {e}");
+                        break;
+                    }
+                }
+                None => break,
+            },
+            next = block_rx.recv() => match next {
                 Some(frame) => {
                     if let Err(e) = wr.write_all(&encode(&frame)).await {
                         debug!("connection write ended: {e}");
@@ -320,6 +359,14 @@ mod tests {
             timeout(Duration::from_secs(2), rx_a.recv()).await.unwrap(),
             Some(Frame::Control(Control::Pong))
         );
+
+        // Serving is bounded per connection.
+        let permits: Vec<_> = (0..BLOCK_WINDOW)
+            .map(|_| conn_a.serve_permit().expect("a permit within the window"))
+            .collect();
+        assert!(conn_a.serve_permit().is_none());
+        drop(permits);
+        assert!(conn_a.serve_permit().is_some());
 
         conn_a.close();
         assert_eq!(

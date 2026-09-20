@@ -17,7 +17,7 @@ use crate::index::{Entry, Index};
 use crate::paths::{
     file_name_of, is_conflict_name, join_rel, parent_of, validate_name, validate_rel,
 };
-use crate::proto::{Control, Frame, INDEX_CHUNK};
+use crate::proto::{chunk_entries, Control, Frame};
 use crate::scan::{apply_hashes, apply_walk, hash_files, walk_paths, ScanOutcome};
 use crate::state::{DirEntry, EntryStatus};
 use crate::vv::VersionVector;
@@ -35,6 +35,7 @@ impl Engine {
         )?;
         self.lock().await.watcher = Some(watcher);
         self.scan_rels(&settings, vec![String::new()]).await?;
+        self.sweep_temp_files().await;
         self.mark_index();
         Ok(())
     }
@@ -111,13 +112,30 @@ impl Engine {
     }
 
     pub(crate) fn broadcast_update(&self, inner: &Inner, entries: Vec<Entry>) {
-        for chunk in entries.chunks(INDEX_CHUNK) {
-            let frame = Frame::Control(Control::IndexUpdate {
-                entries: chunk.to_vec(),
-            });
+        if entries.is_empty() {
+            return;
+        }
+        for chunk in chunk_entries(entries) {
+            let frame = Frame::Control(Control::IndexUpdate { entries: chunk });
             for link in inner.conns.values() {
                 let _ = link.conn.try_send(frame.clone());
             }
+        }
+    }
+
+    /// Removes `.owl-tmp-*` files older than an hour: a download aborted
+    /// by a dropped link leaves one behind, ignored by scans but taking
+    /// space.
+    pub(crate) async fn sweep_temp_files(&self) {
+        let settings = self.settings();
+        if settings.paused || self.is_stopped() {
+            return;
+        }
+        let removed = tokio::task::spawn_blocking(move || sweep_temp_files(&settings.folder))
+            .await
+            .unwrap_or(0);
+        if removed > 0 {
+            debug!("removed {removed} stale temporary files");
         }
     }
 
@@ -204,6 +222,38 @@ pub(crate) async fn list_dir(engine: &Engine, rel: &str) -> Result<Vec<DirEntry>
     Ok(entries)
 }
 
+/// Temporary files older than this are stale.
+const TEMP_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// Deletes stale `.owl-tmp-*` files under `folder`, never following links
+/// and never entering the engine's own metadata directory. Returns how
+/// many were removed.
+pub(crate) fn sweep_temp_files(folder: &Path) -> u32 {
+    let mut removed = 0;
+    let walker = walkdir::WalkDir::new(folder)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || e.file_name() != ".owl")
+        .filter_map(|e| e.ok());
+    for entry in walker {
+        if !entry.file_type().is_file()
+            || !entry.file_name().to_string_lossy().starts_with(".owl-tmp-")
+        {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .ok()
+            .and_then(|md| md.modified().ok())
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > TEMP_FILE_TTL);
+        if stale && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 fn import_tmp(dir: &Path) -> PathBuf {
     let suffix: u32 = rand::random();
     dir.join(format!(".owl-tmp-import-{suffix:08x}"))
@@ -252,6 +302,9 @@ pub(crate) async fn import_files(
             .map(|n| n.nfc().collect::<String>())
             .with_context(|| format!("{} has no file name", source.display()))?;
         validate_name(&name)?;
+        if is_ignored(&name) {
+            bail!("{name} is a reserved name");
+        }
         let md = tokio::fs::metadata(&source)
             .await
             .with_context(|| format!("reading {}", source.display()))?;
@@ -285,6 +338,9 @@ pub(crate) async fn import_reader<R: AsyncRead + Unpin + Send + 'static>(
 ) -> Result<()> {
     let name: String = name.nfc().collect();
     validate_name(&name)?;
+    if is_ignored(&name) {
+        bail!("{name} is a reserved name");
+    }
     let dest_dir = engine.absolute_path(into)?;
     tokio::fs::create_dir_all(&dest_dir).await?;
     let tmp = import_tmp(&dest_dir);
@@ -308,6 +364,10 @@ pub(crate) async fn import_reader<R: AsyncRead + Unpin + Send + 'static>(
 
 pub(crate) async fn create_folder(engine: &Engine, rel: &str) -> Result<()> {
     validate_rel(rel)?;
+    validate_name(file_name_of(rel))?;
+    if is_ignored(rel) {
+        bail!("{rel} is a reserved name");
+    }
     let abs = engine.absolute_path(rel)?;
     tokio::fs::create_dir_all(&abs)
         .await
@@ -345,7 +405,10 @@ pub(crate) async fn rename_entry(engine: &Engine, rel: &str, new_name: &str) -> 
     }
     let from = engine.absolute_path(rel)?;
     let to = engine.absolute_path(&new_rel)?;
-    if tokio::fs::symlink_metadata(&to).await.is_ok() {
+    // On a case-insensitive filesystem the target of a case-only rename
+    // is the file itself, which is fine.
+    let case_only = file_name_of(rel).to_lowercase() == new_name.to_lowercase();
+    if !case_only && tokio::fs::symlink_metadata(&to).await.is_ok() {
         bail!("{new_name} already exists");
     }
     tokio::fs::rename(&from, &to)
@@ -416,4 +479,27 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
     engine.dir_changed("");
     engine.publish_state().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sweep_removes_only_stale_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        let old = dir.path().join("sub/.owl-tmp-abcd-00000001");
+        let fresh = dir.path().join(".owl-tmp-abcd-00000002");
+        let real = dir.path().join("keep.txt");
+        std::fs::write(&old, b"x").unwrap();
+        std::fs::write(&fresh, b"x").unwrap();
+        std::fs::write(&real, b"x").unwrap();
+        crate::clock::set_mtime_ms(&old, crate::clock::now_ms() - 2 * 3600 * 1000).unwrap();
+        crate::clock::set_mtime_ms(&real, crate::clock::now_ms() - 2 * 3600 * 1000).unwrap();
+        assert_eq!(sweep_temp_files(dir.path()), 1);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert!(real.exists());
+    }
 }

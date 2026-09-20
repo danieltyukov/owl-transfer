@@ -12,11 +12,15 @@ use crate::index::Entry;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const BLOCK_SIZE: u32 = 256 * 1024;
+/// Blocks in flight per download, and the bound on blocks queued for
+/// sending per connection.
+pub const BLOCK_WINDOW: usize = 8;
 /// Larger than any control frame the engine builds and than a block with
 /// its header; anything bigger is a broken or hostile peer.
 pub const MAX_FRAME: usize = 4 * 1024 * 1024;
-/// Entries per `Index` frame; a full index is sent as several.
-pub const INDEX_CHUNK: usize = 1000;
+/// Encoded size at which an `Index` or `IndexUpdate` frame is cut; a full
+/// index is sent as several frames, each well under `MAX_FRAME`.
+pub const INDEX_CHUNK_BYTES: usize = 1024 * 1024;
 
 const TYPE_CONTROL: u8 = 0;
 const TYPE_BLOCK: u8 = 1;
@@ -139,6 +143,34 @@ pub fn decode(mut payload: Bytes) -> Result<Frame> {
     }
 }
 
+/// A conservative size for one entry's JSON, so chunks are cut by bytes
+/// rather than by count and a frame never exceeds the limit however long
+/// the paths are.
+fn entry_size(entry: &Entry) -> usize {
+    entry.path.len() * 6 / 5 + 200 + entry.vv.len() * 96
+}
+
+/// Splits entries into runs that encode to at most about `INDEX_CHUNK_BYTES`.
+/// An empty input yields one empty chunk so a peer still gets a frame.
+pub fn chunk_entries(entries: Vec<Entry>) -> Vec<Vec<Entry>> {
+    let mut chunks = Vec::new();
+    let mut current = Vec::new();
+    let mut size = 0usize;
+    for entry in entries {
+        let this = entry_size(&entry);
+        if !current.is_empty() && size + this > INDEX_CHUNK_BYTES {
+            chunks.push(std::mem::take(&mut current));
+            size = 0;
+        }
+        size += this;
+        current.push(entry);
+    }
+    if !current.is_empty() || chunks.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 pub struct FrameReader<R> {
     reader: R,
 }
@@ -229,6 +261,37 @@ mod tests {
         drop(client);
         let mut reader = FrameReader::new(server);
         assert!(reader.next().await.is_err());
+    }
+
+    #[test]
+    fn chunks_are_cut_by_encoded_size() {
+        use crate::index::EntryKind;
+        let entries: Vec<Entry> = (0..4000)
+            .map(|i| Entry {
+                path: format!("{}/{i:05}.bin", "d".repeat(400)),
+                kind: EntryKind::File,
+                size: i,
+                mtime_ms: 1,
+                hash: Some("a".repeat(64)),
+                deleted: false,
+                vv: (0..3)
+                    .map(|d| (format!("device-{d}-{}", "x".repeat(60)), d))
+                    .collect(),
+                seen_at_ms: 1,
+            })
+            .collect();
+        let chunks = chunk_entries(entries.clone());
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), entries.len());
+        for chunk in &chunks {
+            let json = serde_json::to_vec(&Control::Index {
+                entries: chunk.clone(),
+            })
+            .unwrap();
+            assert!(json.len() <= INDEX_CHUNK_BYTES + 4096, "{}", json.len());
+            assert!(json.len() < MAX_FRAME);
+        }
+        assert_eq!(chunk_entries(Vec::new()), vec![Vec::<Entry>::new()]);
     }
 
     #[test]

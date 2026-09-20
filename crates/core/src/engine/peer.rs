@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
-use super::inner::{Inner, PeerLink, PendingPairing};
+use super::inner::{Deferred, Inner, PeerLink, PendingPairing};
 use super::Engine;
 use crate::clock::now_ms;
 use crate::config::DEFAULT_TCP_PORT;
@@ -24,7 +24,7 @@ use crate::pairing::{
     commitment, nonce_from_hex, nonce_to_hex, pairing_code, random_nonce, verify_commitment,
 };
 use crate::peers::PeerRecord;
-use crate::proto::{Control, Frame, INDEX_CHUNK};
+use crate::proto::{chunk_entries, Control, Frame, BLOCK_UNAVAILABLE};
 use crate::state::PairingDirection;
 use crate::transfer::{self, Requester, Served};
 
@@ -41,6 +41,12 @@ const PAIR_COOLDOWN_MS: i64 = 10_000;
 const MAX_UNAUTHENTICATED: usize = 32;
 const DOWNLOAD_ATTEMPTS: u32 = 3;
 const RETRY_DELAY: Duration = Duration::from_secs(2);
+/// After the quick attempts, the wait between offers grows from this,
+/// doubling each time, up to `DEFER_MAX_MS`.
+const DEFER_BASE_MS: i64 = 30_000;
+const DEFER_MAX_MS: i64 = 10 * 60 * 1000;
+/// A full rescan on connect happens at most this often across all peers.
+const CONNECT_RESCAN_MS: i64 = 30_000;
 
 /// Counts a connection that has not proven a pairing while it lives.
 struct UnauthGuard(Engine);
@@ -460,12 +466,13 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
     inner.next_link_id += 1;
     let requester = Requester::new(conn.clone());
     let (queue_tx, queue_rx) = mpsc::unbounded_channel();
+    let queue_len = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let worker = tokio::spawn(download_worker(
         engine.clone(),
         requester.clone(),
         link_id,
         queue_rx,
-        queue_tx.clone(),
+        queue_len.clone(),
     ));
     inner.conns.insert(
         conn.peer_id.clone(),
@@ -474,6 +481,8 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
             conn: conn.clone(),
             requester: requester.clone(),
             queue: queue_tx,
+            queue_len,
+            deferred: Vec::new(),
             worker,
         },
     );
@@ -509,8 +518,16 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
     };
     info!("connected to {} ({})", conn.peer_name, peer_id);
     {
-        let inner = engine.lock().await;
+        let mut inner = engine.lock().await;
         engine.send_full_index(&inner, &conn);
+        // A missed event can never be permanent: every new connection asks
+        // for a full rescan, at most once per half minute across all
+        // peers so a flapping link cannot keep the scanner busy.
+        let now = now_ms();
+        if now - inner.last_connect_rescan_ms >= CONNECT_RESCAN_MS {
+            inner.last_connect_rescan_ms = now;
+            let _ = engine.shared().watch_tx.try_send(vec![String::new()]);
+        }
     }
     engine.mark_state();
 
@@ -565,16 +582,8 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
 impl Engine {
     pub(crate) fn send_full_index(&self, inner: &Inner, conn: &Connection) {
         let entries: Vec<Entry> = inner.index.entries().cloned().collect();
-        if entries.is_empty() {
-            let _ = conn.try_send(Frame::Control(Control::Index {
-                entries: Vec::new(),
-            }));
-            return;
-        }
-        for chunk in entries.chunks(INDEX_CHUNK) {
-            let _ = conn.try_send(Frame::Control(Control::Index {
-                entries: chunk.to_vec(),
-            }));
+        for chunk in chunk_entries(entries) {
+            let _ = conn.try_send(Frame::Control(Control::Index { entries: chunk }));
         }
     }
 }
@@ -590,14 +599,20 @@ async fn serve(
     offset: u64,
     len: u32,
 ) {
+    // At most a window of requests is served at once; a peer asking for
+    // more than it can read gets "unavailable" and will ask again.
+    let Some(_permit) = conn.serve_permit() else {
+        let _ = conn.try_send(Frame::Block {
+            req_id,
+            status: BLOCK_UNAVAILABLE,
+            data: bytes::Bytes::new(),
+        });
+        return;
+    };
     let settings = engine.settings();
     let served = {
         let inner = engine.lock().await;
-        let still_linked = inner
-            .conns
-            .get(&conn.peer_id)
-            .is_some_and(|l| l.link_id == link_id);
-        if !still_linked || !is_hex_hash(&hash) {
+        if !inner.is_linked(&conn.peer_id, link_id) || !is_hex_hash(&hash) {
             None
         } else {
             inner
@@ -634,16 +649,18 @@ async fn serve(
 }
 
 /// One file at a time per peer, eight blocks in flight. A failed download
-/// is retried a few times; after that the next index exchange resends it.
+/// is retried a few times quickly, then offered again from the
+/// housekeeping tick with a growing delay for as long as the link lives.
 async fn download_worker(
     engine: Engine,
     requester: Arc<Requester>,
     link_id: u64,
     mut queue: mpsc::UnboundedReceiver<Entry>,
-    requeue: mpsc::UnboundedSender<Entry>,
+    queue_len: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let mut attempts: HashMap<String, u32> = HashMap::new();
     while let Some(entry) = queue.recv().await {
+        queue_len.fetch_sub(1, Ordering::Relaxed);
         match engine.fetch_entry(&requester, link_id, entry.clone()).await {
             Ok(()) => {
                 attempts.remove(&entry.path);
@@ -651,33 +668,90 @@ async fn download_worker(
             Err(e) => {
                 let n = attempts.entry(entry.path.clone()).or_insert(0);
                 *n += 1;
+                let n = *n;
                 debug!(
                     "download of {} from {} failed (attempt {n}): {e:#}",
                     entry.path,
                     requester.conn().peer_id
                 );
-                if *n < DOWNLOAD_ATTEMPTS && !requester.conn().is_closed() {
-                    let requeue = requeue.clone();
+                if requester.conn().is_closed() {
+                    continue;
+                }
+                if n < DOWNLOAD_ATTEMPTS {
                     let engine = engine.clone();
+                    let peer_id = requester.conn().peer_id.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(RETRY_DELAY).await;
-                        let mut inner = engine.lock().await;
-                        if requeue.send(entry.clone()).is_ok() {
-                            inner.queued_paths.insert(entry.path);
-                            engine
-                                .shared()
-                                .transfers
-                                .lock()
-                                .expect("transfers lock")
-                                .adjust_queued(1);
-                        }
+                        engine.requeue(&peer_id, link_id, entry).await;
                     });
                 } else {
-                    engine
-                        .error(format!("could not fetch {}: {e:#}", entry.path))
-                        .await;
+                    let wait = (DEFER_BASE_MS << (n - DOWNLOAD_ATTEMPTS).min(8)).min(DEFER_MAX_MS);
+                    if n == DOWNLOAD_ATTEMPTS {
+                        engine
+                            .error(format!(
+                                "could not fetch {}: {e:#}; will keep trying",
+                                entry.path
+                            ))
+                            .await;
+                    }
+                    let mut inner = engine.lock().await;
+                    if let Some(link) = inner.conns.get_mut(&requester.conn().peer_id) {
+                        if link.link_id == link_id {
+                            link.deferred.push(Deferred {
+                                entry,
+                                retry_at_ms: now_ms() + wait,
+                            });
+                        }
+                    }
                 }
             }
+        }
+    }
+}
+
+impl Engine {
+    /// Puts an entry back on a link's download queue, if the link is
+    /// still the current one.
+    pub(crate) async fn requeue(&self, peer_id: &str, link_id: u64, entry: Entry) {
+        let mut inner = self.lock().await;
+        if !inner.is_linked(peer_id, link_id) {
+            return;
+        }
+        let path = entry.path.clone();
+        let queued = inner
+            .conns
+            .get(peer_id)
+            .is_some_and(|link| link.enqueue(entry));
+        if queued {
+            inner.queued_paths.insert(path);
+            self.shared()
+                .transfers
+                .lock()
+                .expect("transfers lock")
+                .adjust_queued(1);
+        }
+    }
+
+    /// Offers deferred downloads whose time has come. Called from the
+    /// housekeeping tick.
+    pub(crate) fn requeue_deferred(&self, inner: &mut Inner, now: i64) {
+        let mut requeued = 0;
+        for link in inner.conns.values_mut() {
+            let (due, later): (Vec<Deferred>, Vec<Deferred>) =
+                link.deferred.drain(..).partition(|d| d.retry_at_ms <= now);
+            link.deferred = later;
+            for d in due {
+                if link.enqueue(d.entry) {
+                    requeued += 1;
+                }
+            }
+        }
+        if requeued > 0 {
+            self.shared()
+                .transfers
+                .lock()
+                .expect("transfers lock")
+                .adjust_queued(requeued);
         }
     }
 }

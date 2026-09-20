@@ -814,6 +814,35 @@ async fn listing_and_imports_reflect_sync_status() {
         .unwrap();
     assert!(wait_for_bytes(&b, "bundle/streamed.txt", b"from a stream", WAIT).await);
 
+    // Names the engine reserves, or that not every device can store, are
+    // refused before anything is written.
+    assert!(a.engine.create_folder(".owl").await.is_err());
+    assert!(a.engine.create_folder("bundle/.owl-tmp-x").await.is_err());
+    assert!(a
+        .engine
+        .import_reader(".owl-tmp-x", "", std::io::Cursor::new(Vec::new()))
+        .await
+        .is_err());
+    assert!(a
+        .engine
+        .rename_entry("dropped.txt", "a:b.txt")
+        .await
+        .is_err());
+    assert!(a.engine.rename_entry("dropped.txt", "CON").await.is_err());
+    assert!(a
+        .engine
+        .rename_entry("dropped.txt", "Dropped.txt")
+        .await
+        .is_ok());
+    assert!(wait_for_bytes(&b, "Dropped.txt", b"dropped in", WAIT).await);
+    assert!(a
+        .engine
+        .rename_entry("Dropped.txt", "dropped.txt")
+        .await
+        .is_ok());
+    assert!(wait_for_bytes(&b, "dropped.txt", b"dropped in", WAIT).await);
+    assert!(!a.path(".owl").exists());
+
     assert!(
         wait_until(
             || {

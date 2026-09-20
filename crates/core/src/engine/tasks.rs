@@ -183,6 +183,7 @@ async fn housekeeping_loop(engine: Engine) {
                 .remove_tombstones_older_than(now - TOMBSTONE_TTL_MS);
             engine.mark_index();
         }
+        engine.requeue_deferred(&mut inner, now);
         drop(inner);
         // A snapshot every few seconds keeps "last seen" and the transfer
         // rate honest; the publisher drops it if nothing changed.
@@ -196,6 +197,7 @@ async fn rescan_loop(engine: Engine) {
     loop {
         tokio::time::sleep(RESCAN_INTERVAL).await;
         engine.on_local_batch(vec![String::new()]).await;
+        engine.sweep_temp_files().await;
     }
 }
 

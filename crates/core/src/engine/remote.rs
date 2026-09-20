@@ -1,11 +1,13 @@
 //! Remote changes: what to do with entries a peer announces, fetching the
 //! bytes when needed, and putting a fetched file in place.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use tracing::{debug, warn};
+use unicode_normalization::UnicodeNormalization;
 
 use super::inner::{Inner, Settings};
 use super::Engine;
@@ -13,128 +15,251 @@ use crate::clock::{mtime_ms, now_ms, set_mtime_ms};
 use crate::hash::is_hex_hash;
 use crate::ignore::is_ignored;
 use crate::index::{Entry, EntryKind, Index};
-use crate::paths::{conflict_name, parent_of, safe_abs, validate_rel};
+use crate::paths::{conflict_name, join_rel, parent_of, safe_abs, validate_portable, validate_rel};
 use crate::sync::{apply_adopt, decide, needs_bytes, resolve_conflict, Decision};
 use crate::transfer::{self, Requester};
 use crate::vv::VersionVector;
 
-/// Whether an entry from the wire is well formed: a valid relative path
-/// that is not ignored, a lowercase hex hash on live files and no hash
-/// anywhere else. The hash is the only wire string besides the path that
-/// reaches a file name, so it is checked before anything is done with it.
-fn acceptable(remote: &Entry) -> bool {
+/// Why an entry from the wire was not applied.
+enum Rejected {
+    /// Malformed: a bad path, an ignored name, or a hash that is not a
+    /// lowercase hex digest where one is required (or present where none
+    /// belongs). Logged, never shown: only a broken peer sends these.
+    Malformed,
+    /// A name this device cannot store; shown once, so the person can
+    /// rename it on the other side.
+    Unportable(String),
+}
+
+/// The hash is the only wire string besides the path that reaches a file
+/// name, so it is checked before anything is done with it.
+fn check(remote: &Entry) -> Result<(), Rejected> {
     if validate_rel(&remote.path).is_err() || is_ignored(&remote.path) {
-        return false;
+        return Err(Rejected::Malformed);
     }
-    if remote.deleted || remote.kind == EntryKind::Dir {
+    let hash_ok = if remote.deleted || remote.kind == EntryKind::Dir {
         remote.hash.is_none()
     } else {
         remote.hash.as_deref().is_some_and(is_hex_hash)
+    };
+    if !hash_ok {
+        return Err(Rejected::Malformed);
     }
+    if let Err(e) = validate_portable(&remote.path) {
+        return Err(Rejected::Unportable(format!(
+            "cannot sync {}: {e}",
+            remote.path
+        )));
+    }
+    Ok(())
+}
+
+/// A same-content local file found for a remote entry: copying it makes a
+/// rename on the other side instant here. The copy runs outside the lock.
+struct CopyJob {
+    remote: Entry,
+    source: String,
 }
 
 impl Engine {
-    /// Handles one batch of entries from a peer. Live entries go first so a
-    /// rename (a new path plus a tombstone) can copy the old file before it
-    /// is removed. `link_id` names the connection the batch came in on;
-    /// frames still buffered from a peer that was forgotten or replaced
-    /// since are dropped.
+    /// Handles one batch of entries from a peer in two passes around the
+    /// copies of same-content files, so the engine lock is never held
+    /// while a large file is copied: live entries are decided under the
+    /// lock, copies run without it, then copies are installed and
+    /// tombstones applied under the lock again. Tombstones go last so a
+    /// rename (a new path plus a tombstone) still finds its source.
+    /// `link_id` names the connection the batch came in on; frames still
+    /// buffered from a peer that was forgotten or replaced since are
+    /// dropped.
     pub(crate) async fn on_remote_entries(&self, peer_id: &str, link_id: u64, entries: Vec<Entry>) {
         let settings = self.settings();
         if settings.paused || self.is_stopped() {
             return;
         }
-        let me = self.shared.identity.id.clone();
-        let mut inner = self.lock().await;
-        if !inner.is_linked(peer_id, link_id) {
-            debug!(
-                "dropping {} entries from a stale connection to {peer_id}",
-                entries.len()
-            );
-            return;
+        let mut live = Vec::new();
+        let mut tombs = Vec::new();
+        let mut reported: HashSet<String> = HashSet::new();
+        let mut unportable = Vec::new();
+        for mut remote in entries {
+            remote.path = remote.path.nfc().collect();
+            match check(&remote) {
+                Ok(()) => {
+                    if remote.deleted {
+                        tombs.push(remote);
+                    } else {
+                        live.push(remote);
+                    }
+                }
+                Err(Rejected::Malformed) => {
+                    warn!(
+                        "{peer_id} sent a malformed entry for {:?}; dropped",
+                        remote.path
+                    );
+                }
+                Err(Rejected::Unportable(message)) => {
+                    if reported.insert(remote.path.clone()) {
+                        unportable.push(message);
+                    }
+                }
+            }
         }
-        let now = now_ms();
-
-        let (mut live, mut tombs): (Vec<Entry>, Vec<Entry>) =
-            entries.into_iter().partition(|e| !e.deleted);
+        // Directories before the files inside them, shorter paths first;
+        // tombstones deepest first, so a directory is empty by the time
+        // its own tombstone is applied.
         live.sort_by(|a, b| {
             (a.kind != EntryKind::Dir)
                 .cmp(&(b.kind != EntryKind::Dir))
                 .then_with(|| a.path.len().cmp(&b.path.len()))
         });
-        // Deepest first, so a directory is empty by the time its own
-        // tombstone is applied.
         tombs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
 
-        let mut announce = Vec::new();
-        for remote in live.into_iter().chain(tombs) {
-            if !acceptable(&remote) {
-                warn!(
-                    "{peer_id} sent a malformed entry for {:?}; dropped",
-                    remote.path
-                );
-                continue;
+        let mut copies = Vec::new();
+        {
+            let mut inner = self.lock().await;
+            if !inner.is_linked(peer_id, link_id) {
+                debug!("dropping a batch from a stale connection to {peer_id}");
+                return;
             }
-            let local = inner.index.get(&remote.path).cloned();
-            match decide(local.as_ref(), &remote, &me, peer_id) {
-                Decision::Ignore => {}
-                Decision::Adopt => {
-                    self.adopt(
-                        &mut inner,
-                        peer_id,
-                        link_id,
-                        &settings,
-                        local.as_ref(),
-                        remote,
-                        now,
-                        &mut announce,
-                    )
-                    .await
-                }
-                Decision::Conflict {
-                    winner_remote: false,
-                } => {
-                    let local = local.expect("a conflict has a local entry");
-                    let (winner, _) = resolve_conflict(
-                        &mut inner.index,
-                        &local,
-                        &remote,
-                        false,
-                        &me,
-                        &settings.device_name,
-                        now,
-                    );
-                    inner.recent_changes.insert(winner.path.clone(), now);
-                    announce.push(winner);
-                }
-                Decision::Conflict {
-                    winner_remote: true,
-                } => {
-                    if remote.kind == EntryKind::Dir {
-                        let local = local.expect("a conflict has a local entry");
-                        self.dir_over_file(
-                            &mut inner,
-                            &settings,
-                            &local,
-                            &remote,
-                            now,
-                            &mut announce,
-                        )
-                        .await;
-                    } else {
-                        self.want_bytes(&mut inner, peer_id, &settings, remote, now)
-                            .await;
-                    }
+            for message in unportable {
+                inner.push_error(message);
+            }
+            let now = now_ms();
+            let mut announce = Vec::new();
+            for remote in live {
+                self.handle_entry(
+                    &mut inner,
+                    peer_id,
+                    link_id,
+                    &settings,
+                    remote,
+                    now,
+                    &mut announce,
+                    &mut copies,
+                )
+                .await;
+            }
+            self.finish_batch(&mut inner, announce, now);
+        }
+
+        let mut installs = Vec::new();
+        let mut downloads = Vec::new();
+        for job in copies {
+            match transfer::local_copy(&settings.folder, &job.source, &job.remote).await {
+                Ok(Some(tmp)) => installs.push((job.remote, tmp)),
+                Ok(None) => downloads.push(job.remote),
+                Err(e) => {
+                    debug!("local copy of {} failed: {e:#}", job.source);
+                    downloads.push(job.remote);
                 }
             }
         }
+
+        {
+            let mut inner = self.lock().await;
+            if !inner.is_linked(peer_id, link_id) {
+                for (_, tmp) in installs {
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                }
+                return;
+            }
+            let now = now_ms();
+            let mut announce = Vec::new();
+            for (remote, tmp) in installs {
+                if let Err(e) = self
+                    .install_file(&mut inner, peer_id, &settings, remote, tmp, now)
+                    .await
+                {
+                    debug!("local copy not installed: {e:#}");
+                }
+            }
+            for remote in downloads {
+                self.queue_download(&mut inner, peer_id, remote);
+            }
+            let mut unused = Vec::new();
+            for remote in tombs {
+                self.handle_entry(
+                    &mut inner,
+                    peer_id,
+                    link_id,
+                    &settings,
+                    remote,
+                    now,
+                    &mut announce,
+                    &mut unused,
+                )
+                .await;
+            }
+            self.finish_batch(&mut inner, announce, now);
+        }
+        self.mark_state();
+    }
+
+    fn finish_batch(&self, inner: &mut Inner, announce: Vec<Entry>, now: i64) {
         if !announce.is_empty() {
             inner.last_change_ms = Some(now);
-            self.broadcast_update(&inner, announce);
+            self.broadcast_update(inner, announce);
         }
         self.mark_index();
-        drop(inner);
-        self.mark_state();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn handle_entry(
+        &self,
+        inner: &mut Inner,
+        peer_id: &str,
+        link_id: u64,
+        settings: &Settings,
+        remote: Entry,
+        now: i64,
+        announce: &mut Vec<Entry>,
+        copies: &mut Vec<CopyJob>,
+    ) {
+        let me = self.shared.identity.id.clone();
+        let local = inner.index.get(&remote.path).cloned();
+        match decide(local.as_ref(), &remote, &me, peer_id) {
+            Decision::Ignore => {}
+            Decision::Adopt => {
+                self.adopt(
+                    inner,
+                    peer_id,
+                    link_id,
+                    settings,
+                    local.as_ref(),
+                    remote,
+                    now,
+                    announce,
+                    copies,
+                )
+                .await
+            }
+            Decision::Conflict {
+                winner_remote: false,
+            } => {
+                let local = local.expect("a conflict has a local entry");
+                let (winner, _) = resolve_conflict(
+                    &mut inner.index,
+                    &local,
+                    &remote,
+                    false,
+                    &me,
+                    &settings.device_name,
+                    now,
+                );
+                inner.recent_changes.insert(winner.path.clone(), now);
+                announce.push(winner);
+            }
+            Decision::Conflict {
+                winner_remote: true,
+            } => {
+                if remote.kind == EntryKind::Dir {
+                    let local = local.expect("a conflict has a local entry");
+                    self.dir_over_file(inner, settings, &local, &remote, now, announce)
+                        .await;
+                } else {
+                    self.want_bytes(inner, peer_id, settings, remote, copies);
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -148,6 +273,7 @@ impl Engine {
         remote: Entry,
         now: i64,
         announce: &mut Vec<Entry>,
+        copies: &mut Vec<CopyJob>,
     ) {
         let me = &self.shared.identity.id;
         let folder = &settings.folder;
@@ -221,7 +347,7 @@ impl Engine {
             }
             apply_adopt(&mut inner.index, &remote, now);
         } else {
-            self.want_bytes(inner, peer_id, settings, remote, now).await;
+            self.want_bytes(inner, peer_id, settings, remote, copies);
         }
     }
 
@@ -288,15 +414,15 @@ impl Engine {
     }
 
     /// Gets a remote file's bytes: by copying a local file with the same
-    /// content when there is one, which makes a rename on the other side
-    /// instant here, otherwise by queueing a download from the peer.
-    async fn want_bytes(
+    /// content when there is one (recorded as a job for after the lock),
+    /// otherwise by queueing a download from the peer.
+    fn want_bytes(
         &self,
         inner: &mut Inner,
         peer_id: &str,
         settings: &Settings,
         remote: Entry,
-        now: i64,
+        copies: &mut Vec<CopyJob>,
     ) {
         let Some(hash) = remote.hash.as_deref() else {
             return;
@@ -310,30 +436,25 @@ impl Engine {
             .find_by_hash(hash)
             .filter(|e| e.path != remote.path)
             .map(|e| e.path.clone());
-        if let Some(source) = source {
-            match transfer::local_copy(&settings.folder, &source, &remote).await {
-                Ok(Some(tmp)) => {
-                    if let Err(e) = self
-                        .install_file(inner, peer_id, settings, remote, tmp, now)
-                        .await
-                    {
-                        debug!("local copy not installed: {e:#}");
-                    }
-                    return;
-                }
-                Ok(None) => {}
-                Err(e) => debug!("local copy of {source} failed: {e:#}"),
-            }
+        match source {
+            Some(source) => copies.push(CopyJob { remote, source }),
+            None => self.queue_download(inner, peer_id, remote),
         }
-        if let Some(link) = inner.conns.get(peer_id) {
-            if link.queue.send(remote.clone()).is_ok() {
-                inner.queued_paths.insert(remote.path);
-                self.shared
-                    .transfers
-                    .lock()
-                    .expect("transfers lock")
-                    .adjust_queued(1);
-            }
+    }
+
+    fn queue_download(&self, inner: &mut Inner, peer_id: &str, remote: Entry) {
+        let path = remote.path.clone();
+        let queued = inner
+            .conns
+            .get(peer_id)
+            .is_some_and(|link| link.enqueue(remote));
+        if queued {
+            inner.queued_paths.insert(path);
+            self.shared
+                .transfers
+                .lock()
+                .expect("transfers lock")
+                .adjust_queued(1);
         }
     }
 
@@ -533,7 +654,7 @@ impl Engine {
 fn record_ancestors(index: &mut Index, folder: &Path, path: &str, now: i64) {
     let mut prefix = String::new();
     for component in parent_of(path).split('/').filter(|c| !c.is_empty()) {
-        prefix = crate::paths::join_rel(&prefix, component);
+        prefix = join_rel(&prefix, component);
         if index.get(&prefix).is_some_and(|e| e.is_live_dir()) {
             continue;
         }
@@ -673,5 +794,24 @@ mod tests {
         assert!(a.vv.is_empty());
         assert!(index.get("a/b").unwrap().is_live_dir());
         assert!(index.get("a/b/c.txt").is_none());
+    }
+
+    #[test]
+    fn wire_entries_are_checked() {
+        let mut ok = file_entry("a/b.txt", 1, 1, false);
+        ok.hash = Some("a".repeat(64));
+        assert!(check(&ok).is_ok());
+        let mut bad_hash = ok.clone();
+        bad_hash.hash = Some("../../../escape/".into());
+        assert!(matches!(check(&bad_hash), Err(Rejected::Malformed)));
+        let mut tomb_with_hash = ok.clone();
+        tomb_with_hash.deleted = true;
+        assert!(matches!(check(&tomb_with_hash), Err(Rejected::Malformed)));
+        let mut dotdot = ok.clone();
+        dotdot.path = "../x".into();
+        assert!(matches!(check(&dotdot), Err(Rejected::Malformed)));
+        let mut unportable = ok.clone();
+        unportable.path = "a:b.txt".into();
+        assert!(matches!(check(&unportable), Err(Rejected::Unportable(_))));
     }
 }

@@ -20,11 +20,11 @@ use crate::conn::Connection;
 use crate::hash::blake3_file;
 use crate::index::Entry;
 use crate::paths::{parent_of, safe_abs};
-use crate::proto::{Control, Frame, BLOCK_OK, BLOCK_SIZE, BLOCK_UNAVAILABLE};
+use crate::proto::{Control, Frame, BLOCK_OK, BLOCK_SIZE, BLOCK_UNAVAILABLE, BLOCK_WINDOW};
 use crate::state::{Transfer, TransferDirection, TransferSummary};
 
 /// Outstanding block requests per download.
-const WINDOW: usize = 8;
+const WINDOW: usize = BLOCK_WINDOW;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const RATE_WINDOW: Duration = Duration::from_secs(2);
 /// An upload with no request for this long is over.
@@ -293,8 +293,12 @@ pub async fn download(
                     entry.path
                 ))
             } else {
-                set_mtime_ms(&tmp, entry.mtime_ms)
-                    .with_context(|| format!("setting mtime on {}", tmp.display()))
+                // Some mounts refuse to set times; the scanner tolerates the
+                // drift by rehashing once and keeping the version vector.
+                if let Err(e) = set_mtime_ms(&tmp, entry.mtime_ms) {
+                    tracing::debug!("cannot set mtime on {}: {e}", entry.path);
+                }
+                Ok(())
             }
         }
         Err(e) => {
@@ -380,7 +384,9 @@ pub async fn local_copy(root: &Path, source_rel: &str, entry: &Entry) -> Result<
         let _ = tokio::fs::remove_file(&tmp).await;
         return Ok(None);
     }
-    set_mtime_ms(&tmp, entry.mtime_ms)?;
+    if let Err(e) = set_mtime_ms(&tmp, entry.mtime_ms) {
+        tracing::debug!("cannot set mtime on {}: {e}", entry.path);
+    }
     Ok(Some(tmp))
 }
 
@@ -411,7 +417,8 @@ pub async fn serve_request(
     let Some(served) = served else {
         return unavailable;
     };
-    if served.hash != hash || len > BLOCK_SIZE || offset + len as u64 > served.size {
+    let end = offset.checked_add(len as u64);
+    if served.hash != hash || len > BLOCK_SIZE || end.is_none_or(|end| end > served.size) {
         return unavailable;
     }
     let Ok(abs) = safe_abs(root, path) else {
@@ -631,6 +638,23 @@ mod tests {
         .await;
         assert!(matches!(
             past_end,
+            Frame::Block {
+                status: BLOCK_UNAVAILABLE,
+                ..
+            }
+        ));
+        let wrapped = serve_request(
+            dir.path(),
+            Some(served.clone()),
+            5,
+            "f.bin",
+            &served.hash,
+            u64::MAX - 10,
+            100,
+        )
+        .await;
+        assert!(matches!(
+            wrapped,
             Frame::Block {
                 status: BLOCK_UNAVAILABLE,
                 ..

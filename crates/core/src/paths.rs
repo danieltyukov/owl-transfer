@@ -69,7 +69,8 @@ pub fn safe_abs(root: &Path, rel: &str) -> Result<PathBuf> {
     Ok(abs)
 }
 
-/// Rejects anything that cannot be a single file or folder name.
+/// Rejects anything that cannot be a single file or folder name on every
+/// platform the folder may reach.
 pub fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("name is empty");
@@ -79,6 +80,38 @@ pub fn validate_name(name: &str) -> Result<()> {
     }
     if name.contains('/') || name.contains('\\') || name.contains('\0') {
         bail!("name contains a path separator: {name}");
+    }
+    portable_component(name)
+}
+
+/// Rejects a relative path with a component that Windows or Android's
+/// shared storage cannot hold: the characters `< > : " | ? *`, control
+/// characters, a trailing dot or space, and the reserved DOS device names.
+pub fn validate_portable(rel: &str) -> Result<()> {
+    for component in rel.split('/') {
+        portable_component(component)?;
+    }
+    Ok(())
+}
+
+fn portable_component(name: &str) -> Result<()> {
+    if let Some(c) = name
+        .chars()
+        .find(|c| "<>:\"|?*".contains(*c) || c.is_control())
+    {
+        bail!("{name:?} contains {c:?}, which not every device can store");
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        bail!("{name:?} ends with a dot or a space, which not every device can store");
+    }
+    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    if reserved {
+        bail!("{name:?} is a reserved name on Windows");
     }
     Ok(())
 }
@@ -234,6 +267,44 @@ mod tests {
         assert!(validate_name("").is_err());
         assert!(validate_name("..").is_err());
         assert!(validate_name("report.pdf").is_ok());
+    }
+
+    #[test]
+    fn portable_names_reject_what_windows_cannot_store() {
+        for bad in [
+            "a:b.txt",
+            "what?.txt",
+            "star*.txt",
+            "quote\".txt",
+            "pipe|.txt",
+            "lt<.txt",
+            "gt>.txt",
+            "trailing.",
+            "trailing ",
+            "CON",
+            "con.txt",
+            "COM1",
+            "lpt9.log",
+            "nul.ls.ok",
+            "tab\t.txt",
+        ] {
+            assert!(validate_portable(bad).is_err(), "{bad}");
+            assert!(validate_name(bad).is_err(), "{bad}");
+        }
+        for good in [
+            "report.pdf",
+            "com.txt",
+            "COM0",
+            "COM10",
+            "console",
+            ".hidden",
+            "a b.txt",
+            "caf\u{e9}.txt",
+        ] {
+            assert!(validate_portable(good).is_ok(), "{good}");
+        }
+        assert!(validate_portable("ok/CON/x").is_err());
+        assert!(validate_portable("ok/fine/x").is_ok());
     }
 
     #[test]
