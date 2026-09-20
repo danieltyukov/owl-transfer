@@ -16,7 +16,7 @@
 - Commit messages: conventional commits scoped by package (`feat(core):`, `feat(ui):`, `feat(app):`, `docs:`, `ci:`). No AI attribution or session trailers.
 - Author: global git identity (`danieltyukov`, `60662998+danieltyukov@users.noreply.github.com`).
 - Ports: TCP 52734, UDP beacon 52735. Protocol version 1.
-- Android: `minSdk 26`, `targetSdk 35`, package `com.owltransfer.app`.
+- Android: `minSdk 30`, `targetSdk 35`, package `com.owltransfer.app`.
 - Product name "Owl Transfer", binary `owl-transfer`, identifier `com.owltransfer.app`, version `0.1.0` everywhere.
 - Every colour token has a definition on bare `:root`.
 - Rust edition 2021, `cargo clippy -- -D warnings` clean, `cargo fmt` clean.
