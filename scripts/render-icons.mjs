@@ -1,0 +1,288 @@
+#!/usr/bin/env node
+// Renders every launcher and desktop icon from one drawing of the owl's face.
+//
+// Run by hand, rarely, like the font script beside it, and in this order:
+//
+//   node scripts/render-icons.mjs
+//   cd app && npx tauri icon ../node_modules/.cache/owl-transfer-icons/desktop-1024.png
+//   node scripts/render-icons.mjs
+//
+// The second pass is not a typo. `tauri icon` writes its own Android launcher
+// PNGs over gen/android/app/src/main/res, so the vector adaptive icon has to be
+// laid down after it. The first pass exists to produce the PNG `tauri icon`
+// eats, and is a no-op for everything else.
+//
+// Needs `rsvg-convert` (librsvg) on the PATH. It writes:
+//
+//   app/icon-source.svg                              the desktop artwork, a rounded square
+//   app/public/favicon.svg                           the face alone, for the web build
+//   gen/android/.../drawable/ic_launcher_foreground.xml
+//   gen/android/.../drawable/ic_launcher_background.xml
+//                                                    the adaptive icon's two layers
+//   gen/android/.../mipmap-anydpi-v26/ic_launcher.xml and ic_launcher_round.xml
+//   gen/android/.../mipmap-*/ic_launcher.png and ic_launcher_round.png
+//                                                    Android 7, the only place these are still read
+//   node_modules/.cache/owl-transfer-icons/desktop-1024.png
+//                                                    what `tauri icon` takes as its input
+//
+// The face is a stroked brow, two stroked eye rings with filled pupils and a
+// filled beak, on a 32-unit grid, the same drawing `OwlMark.tsx` renders. It is
+// strokes and fills together rather than one outlined path, so every consumer
+// here carries the stroke attributes; `marks.test.ts` reads `icon-source.svg`
+// back and asserts it still carries these exact path strings, so the drawing
+// lives here once and nowhere else.
+
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+try {
+  execFileSync('rsvg-convert', ['--version'], { stdio: 'ignore' });
+} catch {
+  console.error('This script needs rsvg-convert (librsvg) on the PATH.');
+  console.error('Debian and Ubuntu: sudo apt install librsvg2-bin');
+  console.error('Fedora: sudo dnf install librsvg2-tools. macOS: brew install librsvg');
+  process.exit(1);
+}
+
+const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const res = join(repo, 'app/src-tauri/gen/android/app/src/main/res');
+const cache = join(repo, 'node_modules/.cache/owl-transfer-icons');
+mkdirSync(cache, { recursive: true });
+
+/** The owl's face on the 32-unit grid every mark in the app shares. */
+const BROW = 'M5,11 L16,6.5 L27,11';
+const BEAK = 'M14.4,23.2 L17.6,23.2 L16,26.4 Z';
+const EYES = [
+  { cx: 10.5, cy: 17 },
+  { cx: 21.5, cy: 17 },
+];
+const RING_R = 5;
+const PUPIL_R = 2.1;
+const STROKE = 2.2;
+
+/** The dark theme's amber accent. It reads on a light wallpaper and a dark one. */
+const AMBER = '#e5a54a';
+/** The dark theme's ground, which is what the face is drawn in. */
+const INK = '#111214';
+
+/**
+ * Where the face sits on a 1024 canvas.
+ *
+ * The launcher is masked. Android crops the 108dp canvas to a circle, a
+ * squircle or a rounded square depending on the launcher, and the only region
+ * guaranteed on all of them is the central 66dp circle, radius 33 of 54.
+ *
+ * The binding point is a brow tip, grid (5,11), whose round cap adds half the
+ * 2.2 stroke. At scale 22, with the face centre 1.3dp above the icon centre,
+ * that tip lands 31.1dp from the centre against the 33dp radius: just under 2dp
+ * of margin. Scale 23 left 0.6dp, which is inside but gives a future tweak to
+ * the brow no room at all. The face is 532px across here, just over half the
+ * tile.
+ *
+ * The lift exists because a beak points down, and a face centred on its
+ * bounding box reads as sinking.
+ *
+ * The desktop icon is not masked, so the face is larger: 653px, roughly two
+ * thirds of the tile.
+ */
+const LAUNCHER = { scale: 22, tx: 160, ty: 150 };
+const DESKTOP = { scale: 27, tx: 80, ty: 80 };
+
+/**
+ * The face as SVG, in `colour`, placed by one of the transforms above.
+ *
+ * Passing no transform draws it at grid size, which is what the favicon wants.
+ */
+function face(colour, placement) {
+  const parts = [
+    `<path d="${BROW}" fill="none" stroke="${colour}" stroke-width="${STROKE}" stroke-linecap="round" stroke-linejoin="round"/>`,
+    ...EYES.map(
+      e => `<circle cx="${e.cx}" cy="${e.cy}" r="${RING_R}" fill="none" stroke="${colour}" stroke-width="${STROKE}"/>`,
+    ),
+    ...EYES.map(e => `<circle cx="${e.cx}" cy="${e.cy}" r="${PUPIL_R}" fill="${colour}"/>`),
+    `<path d="${BEAK}" fill="${colour}"/>`,
+  ];
+  if (!placement) {
+    return parts.map(p => `  ${p}`).join('\n');
+  }
+  const { scale, tx, ty } = placement;
+  return [
+    `  <g transform="translate(${tx} ${ty}) scale(${scale})">`,
+    ...parts.map(p => `    ${p}`),
+    '  </g>',
+  ].join('\n');
+}
+
+const desktopSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Owl Transfer</title>
+  <!--
+    The desktop icon, generated by scripts/render-icons.mjs. Edit that script,
+    not this file.
+
+    A rounded square rather than a full-bleed tile, because nothing masks a
+    Linux application icon: the shape has to be the shape.
+  -->
+  <rect width="1024" height="1024" rx="225" ry="225" fill="${AMBER}"/>
+${face(INK, DESKTOP)}
+</svg>
+`;
+
+const launcherSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>Owl Transfer</title>
+  <rect width="1024" height="1024" fill="${AMBER}"/>
+${face(INK, LAUNCHER)}
+</svg>
+`;
+
+/** Android 7 draws these as they are, so they carry their own corners. */
+function legacySvg(round) {
+  const shape = round
+    ? `<circle cx="512" cy="512" r="512" fill="${AMBER}"/>`
+    : `<rect width="1024" height="1024" rx="200" ry="200" fill="${AMBER}"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  ${shape}
+${face(INK, LAUNCHER)}
+</svg>
+`;
+}
+
+/** The face alone, no ground, for the browser tab. */
+const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>Owl Transfer</title>
+  <!-- Generated by scripts/render-icons.mjs. Edit that script, not this file. -->
+${face(AMBER)}
+</svg>
+`;
+
+/*
+ * The adaptive icon's foreground, as a vector drawable in the 108dp viewport.
+ *
+ * VectorDrawable applies a group's scale and then its translate, exactly as the
+ * SVG `translate(...) scale(...)` above does, so the numbers are the launcher
+ * numbers divided by 1024/108. The stroke width stays in grid units: the group
+ * scale multiplies it the same way SVG does.
+ */
+const dp = 108 / 1024;
+const fmt = n => String(Math.round(n * 10_000) / 10_000);
+const strokePath = (d, cap) =>
+  `        <path
+            android:pathData="${d}"
+            android:strokeColor="${INK.toUpperCase()}"
+            android:strokeWidth="${STROKE}"${cap ? '\n            android:strokeLineCap="round"\n            android:strokeLineJoin="round"' : ''} />`;
+/** VectorDrawable has no circle element, so a ring is two arcs closed up. */
+const circlePath = (cx, cy, r) =>
+  `M${cx - r},${cy} a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 ${-r * 2},0 Z`;
+
+const foregroundXml = `<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The owl's face, as the adaptive icon's foreground and its monochrome layer.
+  Generated by scripts/render-icons.mjs from the same drawing OwlMark.tsx and
+  the favicon draw; edit that script rather than this file.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="${fmt(LAUNCHER.scale * dp)}"
+        android:scaleY="${fmt(LAUNCHER.scale * dp)}"
+        android:translateX="${fmt(LAUNCHER.tx * dp)}"
+        android:translateY="${fmt(LAUNCHER.ty * dp)}">
+${strokePath(BROW, true)}
+${EYES.map(e => strokePath(circlePath(e.cx, e.cy, RING_R), false)).join('\n')}
+${EYES.map(
+  e => `        <path
+            android:pathData="${circlePath(e.cx, e.cy, PUPIL_R)}"
+            android:fillColor="${INK.toUpperCase()}" />`,
+).join('\n')}
+        <path
+            android:pathData="${BEAK}"
+            android:fillColor="${INK.toUpperCase()}" />
+    </group>
+</vector>
+`;
+
+const backgroundXml = `<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The adaptive icon's background layer: amber, edge to edge, so whatever shape
+  the launcher masks out is amber with the face inside it. Generated by
+  scripts/render-icons.mjs.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M0,0 L108,0 L108,108 L0,108 Z"
+        android:fillColor="${AMBER.toUpperCase()}" />
+</vector>
+`;
+
+const adaptiveXml = `<?xml version="1.0" encoding="utf-8"?>
+<!-- Generated by scripts/render-icons.mjs. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>
+`;
+
+function write(path, contents) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, contents);
+  console.log(`       ${path.slice(repo.length + 1)}`);
+}
+
+function remove(path) {
+  if (existsSync(path)) {
+    rmSync(path);
+    console.log(`removed ${path.slice(repo.length + 1)}`);
+  }
+}
+
+function render(svg, size, out) {
+  const src = join(cache, `${out.slice(repo.length + 1).replace(/[\\/]/g, '_')}.svg`);
+  writeFileSync(src, svg);
+  mkdirSync(dirname(out), { recursive: true });
+  execFileSync('rsvg-convert', ['-w', String(size), '-h', String(size), '-o', out, src]);
+  console.log(`${String(size).padStart(5)}px ${out.slice(repo.length + 1)}`);
+}
+
+write(join(repo, 'app/icon-source.svg'), desktopSvg);
+write(join(repo, 'app/public/favicon.svg'), faviconSvg);
+render(desktopSvg, 1024, join(cache, 'desktop-1024.png'));
+
+if (!existsSync(res)) {
+  console.log(`\nNo ${res.slice(repo.length + 1)} yet, so the Android launcher was skipped.`);
+  console.log('Run `npx tauri android init` in app/ first, then this script again.');
+} else {
+  write(join(res, 'drawable/ic_launcher_foreground.xml'), foregroundXml);
+  write(join(res, 'drawable/ic_launcher_background.xml'), backgroundXml);
+  write(join(res, 'mipmap-anydpi-v26/ic_launcher.xml'), adaptiveXml);
+  write(join(res, 'mipmap-anydpi-v26/ic_launcher_round.xml'), adaptiveXml);
+  // `tauri android init` leaves the template's own foreground in drawable-v24,
+  // which every device this app runs on would prefer over the one just written
+  // to drawable. Two files, one name, and the wrong one wins.
+  remove(join(res, 'drawable-v24/ic_launcher_foreground.xml'));
+
+  // mdpi is 48dp at 1x; the rest are the usual multiples.
+  for (const [dir, px] of [
+    ['mdpi', 48],
+    ['hdpi', 72],
+    ['xhdpi', 96],
+    ['xxhdpi', 144],
+    ['xxxhdpi', 192],
+  ]) {
+    render(legacySvg(false), px, join(res, `mipmap-${dir}/ic_launcher.png`));
+    render(legacySvg(true), px, join(res, `mipmap-${dir}/ic_launcher_round.png`));
+    // `tauri icon` leaves a PNG foreground behind that the adaptive icon above
+    // no longer points at. Left in place it is dead weight in every APK.
+    remove(join(res, `mipmap-${dir}/ic_launcher_foreground.png`));
+  }
+}
+
+console.log(`\nDesktop icons: cd app && npx tauri icon ${join(cache, 'desktop-1024.png').slice(repo.length + 1)}`);

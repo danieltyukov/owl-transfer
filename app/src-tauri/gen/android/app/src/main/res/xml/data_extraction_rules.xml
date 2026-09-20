@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12 and newer. Nothing this app stores is backed up to the cloud or
+  handed to a new phone during a device to device transfer.
+
+  The engine's private key lives in the data directory and its fingerprint is
+  this device's identity. Copying it to a second phone would put two devices on
+  the network presenting the same fingerprint to everyone that has paired with
+  either. The sync folder itself needs no backup either: the other device
+  already holds every byte of it, which is the whole point.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

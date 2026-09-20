@@ -25,7 +25,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["full"] }
-tracing = "0.1"
+# The "log" feature is what puts tracing events into logcat on Android. With no
+# tracing subscriber installed, tracing emits log records instead, and
+# android_logger is a log sink. See init_logging in lib.rs.
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -33,3 +36,4 @@ tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
+log = "0.4"
