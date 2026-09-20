@@ -16,7 +16,9 @@ pub mod peers;
 pub mod proto;
 pub mod scan;
 pub mod state;
+pub mod sync;
 pub mod tls;
+pub mod transfer;
 pub mod vv;
 pub mod watch;
 

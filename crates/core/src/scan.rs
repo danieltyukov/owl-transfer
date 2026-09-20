@@ -2,14 +2,13 @@
 //! changed, hashing only files whose size or mtime moved.
 
 use std::collections::{BTreeSet, HashSet};
-use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tracing::warn;
 use walkdir::WalkDir;
 
-use crate::clock::system_time_ms;
+use crate::clock::mtime_ms;
 use crate::hash::blake3_file;
 use crate::ignore::is_ignored;
 use crate::index::{Entry, EntryKind, Index};
@@ -77,7 +76,7 @@ pub async fn scan_paths(
                     rel: rel.clone(),
                     is_dir: false,
                     size: md.len(),
-                    mtime_ms: mtime_of(&md),
+                    mtime_ms: mtime_ms(&md),
                 };
                 compare_item(root, &item, index, device_id, now_ms, &mut out).await;
                 // Anything the index still holds under this path belonged to
@@ -114,10 +113,6 @@ fn abs_path(root: &Path, rel: &str) -> PathBuf {
     } else {
         root.join(rel)
     }
-}
-
-fn mtime_of(md: &Metadata) -> i64 {
-    md.modified().map(system_time_ms).unwrap_or(0)
 }
 
 async fn scan_dir(
@@ -187,7 +182,7 @@ fn walk(root: &Path, rel: &str) -> Vec<DiskItem> {
             rel: item_rel,
             is_dir: ft.is_dir(),
             size: if ft.is_dir() { 0 } else { md.len() },
-            mtime_ms: mtime_of(&md),
+            mtime_ms: mtime_ms(&md),
         });
     }
     items
