@@ -20,6 +20,8 @@ const DIAL_INTERVAL: Duration = Duration::from_secs(5);
 const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(1);
 const PING_EVERY_TICKS: u64 = 15;
 const EXPIRY_EVERY_TICKS: u64 = 24 * 3600;
+/// Without a beacon, interfaces are listed this often.
+const ADDRESS_EVERY_TICKS: u64 = 10;
 const SILENCE_LIMIT_MS: i64 = 45_000;
 const RESCAN_INTERVAL: Duration = Duration::from_secs(300);
 const INDEX_SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -140,7 +142,20 @@ async fn housekeeping_loop(engine: Engine) {
         tick += 1;
         let now = now_ms();
         let mut inner = engine.lock().await;
-        let pruned = inner.prune(now);
+        let mut pruned = inner.prune(now);
+        // The beacon sender lists interfaces every two seconds; without
+        // one, list them here.
+        let fresh = match &inner.beacon {
+            Some(beacon) => Some(beacon.addresses()),
+            None if tick % ADDRESS_EVERY_TICKS == 0 => Some(crate::beacon::local_ipv4_addresses()),
+            None => None,
+        };
+        if let Some(fresh) = fresh {
+            if fresh != inner.addresses {
+                inner.addresses = fresh;
+                pruned = true;
+            }
+        }
         if tick % PING_EVERY_TICKS == 0 {
             let silent: Vec<String> = inner
                 .conns

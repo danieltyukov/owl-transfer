@@ -42,6 +42,9 @@ pub struct DeviceInfo {
     pub name: String,
     pub kind: DeviceKind,
     pub port: u16,
+    /// This machine's non-loopback IPv4 addresses, no port, sorted, so the
+    /// person can read them off the screen when pairing by address.
+    pub addresses: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +181,17 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&p).unwrap(),
             r#"{"id":"i","name":"n","kind":"phone","code":"482 913","direction":"incoming"}"#
+        );
+        let d = DeviceInfo {
+            id: "i".into(),
+            name: "n".into(),
+            kind: DeviceKind::Desktop,
+            port: 52734,
+            addresses: vec!["192.168.1.2".into()],
+        };
+        assert_eq!(
+            serde_json::to_string(&d).unwrap(),
+            r#"{"id":"i","name":"n","kind":"desktop","port":52734,"addresses":["192.168.1.2"]}"#
         );
     }
 }

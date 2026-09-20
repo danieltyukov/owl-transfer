@@ -177,6 +177,17 @@ async fn pairing_produces_matching_codes_and_persists_peers() {
     let b = start("Beta").await;
     pair(&a, &b).await;
 
+    let device = a.engine.state().device;
+    assert_eq!(device.port, a.engine.local_port());
+    let mut sorted = device.addresses.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(device.addresses, sorted);
+    assert!(device
+        .addresses
+        .iter()
+        .all(|ip| !ip.starts_with("127.") && !ip.contains(':')));
+
     let peers_a = a.engine.state().peers;
     assert_eq!(peers_a.len(), 1);
     assert_eq!(peers_a[0].name, "Beta");

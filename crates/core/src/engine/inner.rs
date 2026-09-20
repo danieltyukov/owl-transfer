@@ -82,6 +82,8 @@ pub(crate) struct Inner {
     pub dialing: HashSet<String>,
     /// Directory tombstones given one more chance to apply.
     pub tombstone_retries: HashSet<String>,
+    /// This machine's IPv4 addresses, refreshed by the housekeeping tick.
+    pub addresses: Vec<String>,
     pub next_link_id: u64,
 }
 
@@ -101,6 +103,7 @@ impl Inner {
             last_change_ms: None,
             dialing: HashSet::new(),
             tombstone_retries: HashSet::new(),
+            addresses: crate::beacon::local_ipv4_addresses(),
             next_link_id: 1,
         }
     }
@@ -135,6 +138,7 @@ pub(crate) fn empty_state(
             name: settings.device_name.clone(),
             kind,
             port,
+            addresses: crate::beacon::local_ipv4_addresses(),
         },
         folder: settings.folder.to_string_lossy().into_owned(),
         paused: settings.paused,
@@ -271,6 +275,7 @@ impl Engine {
                 name: settings.device_name,
                 kind: self.shared.kind,
                 port: self.shared.local_port,
+                addresses: inner.addresses.clone(),
             },
             folder: settings.folder.to_string_lossy().into_owned(),
             paused: settings.paused,

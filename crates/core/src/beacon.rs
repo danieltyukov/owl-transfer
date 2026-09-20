@@ -52,6 +52,7 @@ pub struct Heard {
 
 pub struct Beacon {
     me: Arc<Mutex<Advertisement>>,
+    addresses: Arc<Mutex<Vec<String>>>,
     port: u16,
     send_task: JoinHandle<()>,
     recv_task: JoinHandle<()>,
@@ -89,15 +90,18 @@ impl Beacon {
         let target_port = if port == 0 { bound_port } else { port };
 
         let me = Arc::new(Mutex::new(me));
+        let addresses = Arc::new(Mutex::new(local_ipv4_addresses()));
         let send_task = tokio::spawn(send_loop(
             socket.clone(),
             me.clone(),
+            addresses.clone(),
             target_port,
             extra_targets,
         ));
         let recv_task = tokio::spawn(recv_loop(socket, me.clone(), tx));
         Ok(Beacon {
             me,
+            addresses,
             port: bound_port,
             send_task,
             recv_task,
@@ -108,6 +112,14 @@ impl Beacon {
         *self.me.lock().expect("beacon advertisement lock") = me;
     }
 
+    /// This machine's addresses as of the sender's last interface listing.
+    pub fn addresses(&self) -> Vec<String> {
+        self.addresses
+            .lock()
+            .expect("beacon addresses lock")
+            .clone()
+    }
+
     pub fn port(&self) -> u16 {
         self.port
     }
@@ -116,6 +128,7 @@ impl Beacon {
 async fn send_loop(
     socket: Arc<UdpSocket>,
     me: Arc<Mutex<Advertisement>>,
+    addresses: Arc<Mutex<Vec<String>>>,
     port: u16,
     extra_targets: Vec<SocketAddr>,
 ) {
@@ -132,10 +145,13 @@ async fn send_loop(
         })
         .expect("beacon packet serialises");
 
+        let interfaces = ipv4_interfaces();
+        *addresses.lock().expect("beacon addresses lock") = addresses_of(&interfaces);
         let mut targets: Vec<SocketAddr> = vec![SocketAddr::from((Ipv4Addr::BROADCAST, port))];
         targets.extend(
-            interface_broadcasts()
-                .into_iter()
+            interfaces
+                .iter()
+                .filter_map(|i| i.broadcast)
                 .map(|ip| SocketAddr::from((ip, port))),
         );
         targets.extend(extra_targets.iter().copied());
@@ -151,13 +167,14 @@ async fn send_loop(
     }
 }
 
-fn interface_broadcasts() -> Vec<Ipv4Addr> {
+/// The non-loopback IPv4 interfaces.
+fn ipv4_interfaces() -> Vec<if_addrs::Ifv4Addr> {
     match if_addrs::get_if_addrs() {
         Ok(interfaces) => interfaces
             .into_iter()
             .filter(|i| !i.is_loopback())
             .filter_map(|i| match i.addr {
-                IfAddr::V4(v4) => v4.broadcast,
+                IfAddr::V4(v4) => Some(v4),
                 IfAddr::V6(_) => None,
             })
             .collect(),
@@ -166,6 +183,23 @@ fn interface_broadcasts() -> Vec<Ipv4Addr> {
             Vec::new()
         }
     }
+}
+
+fn addresses_of(interfaces: &[if_addrs::Ifv4Addr]) -> Vec<String> {
+    let mut out: Vec<String> = interfaces
+        .iter()
+        .filter(|i| !i.ip.is_loopback())
+        .map(|i| i.ip.to_string())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// This machine's non-loopback IPv4 addresses, sorted and without
+/// duplicates, for showing on screen when pairing by address.
+pub fn local_ipv4_addresses() -> Vec<String> {
+    addresses_of(&ipv4_interfaces())
 }
 
 async fn recv_loop(socket: Arc<UdpSocket>, me: Arc<Mutex<Advertisement>>, tx: mpsc::Sender<Heard>) {
@@ -204,6 +238,18 @@ async fn recv_loop(socket: Arc<UdpSocket>, me: Arc<Mutex<Advertisement>>, tx: mp
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_addresses_are_sorted_unique_and_not_loopback() {
+        let addrs = local_ipv4_addresses();
+        let mut sorted = addrs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(addrs, sorted);
+        assert!(addrs.iter().all(|a| !a.starts_with("127.")));
+        assert!(addrs.iter().all(|a| a.parse::<Ipv4Addr>().is_ok()));
+        assert!(addrs.iter().all(|a| !a.contains(':')));
+    }
 
     fn free_udp_port() -> u16 {
         std::net::UdpSocket::bind("127.0.0.1:0")
