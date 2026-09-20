@@ -4,14 +4,17 @@
 
 pub mod clock;
 pub mod config;
+pub mod hash;
 pub mod identity;
 pub mod ignore;
 pub mod index;
 pub mod pairing;
 pub mod paths;
 pub mod peers;
+pub mod scan;
 pub mod state;
 pub mod vv;
+pub mod watch;
 
 pub use config::{Config, DeviceKind};
 pub use state::{
