@@ -397,8 +397,51 @@ fn redial_address(conn: &Connection) -> String {
     if conn.outbound {
         conn.addr.to_string()
     } else {
-        SocketAddr::new(conn.addr.ip(), DEFAULT_TCP_PORT).to_string()
+        inbound_redial_address(conn.addr.ip(), None, None).to_string()
     }
+}
+
+/// Where to redial a peer that connected to us. The beacon's advertised
+/// address is best; failing that, the connection's IP with the port we
+/// already knew for the peer, or the default port when we know none.
+fn inbound_redial_address(
+    ip: IpAddr,
+    heard: Option<SocketAddr>,
+    stored: Option<SocketAddr>,
+) -> SocketAddr {
+    heard.unwrap_or_else(|| {
+        SocketAddr::new(ip, stored.map(|s| s.port()).unwrap_or(DEFAULT_TCP_PORT))
+    })
+}
+
+/// The peer changed its name or kind while connected: update the link and
+/// the stored record so the interface and the next start show it.
+async fn renamed(
+    engine: &Engine,
+    peer_id: &str,
+    link_id: u64,
+    name: String,
+    kind: crate::config::DeviceKind,
+) {
+    let mut inner = engine.lock().await;
+    if !inner.is_linked(peer_id, link_id) {
+        return;
+    }
+    if let Some(link) = inner.conns.get_mut(peer_id) {
+        link.conn.peer_name = name.clone();
+        link.conn.peer_kind = kind;
+    }
+    if let Some(mut record) = inner.peers.get(peer_id) {
+        if record.name != name || record.kind != kind {
+            record.name = name;
+            record.kind = kind;
+            if let Err(e) = inner.peers.upsert(record) {
+                inner.push_error(format!("saving peers: {e:#}"));
+            }
+        }
+    }
+    drop(inner);
+    engine.publish_state().await;
 }
 
 async fn store_peer(engine: &Engine, conn: &Connection) {
@@ -498,11 +541,18 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
     );
     let now = now_ms();
     inner.peers.set_last_seen(&conn.peer_id, now);
-    if conn.outbound {
-        let _ = inner
+    let address = if conn.outbound {
+        conn.addr
+    } else {
+        let heard = inner.nearby.get(&conn.peer_id).map(|h| h.addr);
+        let stored = inner
             .peers
-            .set_address(&conn.peer_id, conn.addr.to_string());
-    }
+            .get(&conn.peer_id)
+            .and_then(|p| p.last_address)
+            .and_then(|a| a.parse().ok());
+        inbound_redial_address(conn.addr.ip(), heard, stored)
+    };
+    let _ = inner.peers.set_address(&conn.peer_id, address.to_string());
     Some((link_id, requester))
 }
 
@@ -576,6 +626,15 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
                     warn!("{} refused this device: {reason}", conn.peer_name);
                     forget_because_refused(&engine, &conn).await;
                     break;
+                }
+                Control::Hello { id, name, kind, .. } => {
+                    // A Hello after the first carries a new name or kind;
+                    // nothing else about it changes.
+                    if id == peer_id {
+                        renamed(&engine, &peer_id, link_id, name, kind).await;
+                    } else {
+                        warn!("{} sent a Hello for another id; ignored", conn.peer_name);
+                    }
                 }
                 Control::Error { message } => warn!("{}: {message}", conn.peer_name),
                 other => warn!("unexpected {other:?} from {}", conn.peer_name),
@@ -768,5 +827,28 @@ impl Engine {
             }
             link.deferred = later;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_inbound_peer_gets_the_best_known_address() {
+        let ip: IpAddr = "10.0.0.9".parse().unwrap();
+        let heard: SocketAddr = "10.0.0.9:52744".parse().unwrap();
+        let stored: SocketAddr = "192.168.1.5:52744".parse().unwrap();
+        assert_eq!(inbound_redial_address(ip, Some(heard), Some(stored)), heard);
+        assert_eq!(
+            inbound_redial_address(ip, None, Some(stored)),
+            "10.0.0.9:52744".parse().unwrap(),
+            "the IP it connected from, with the port we knew"
+        );
+        assert_eq!(
+            inbound_redial_address(ip, None, None),
+            "10.0.0.9:52734".parse().unwrap(),
+            "the default port when nothing better is known"
+        );
     }
 }

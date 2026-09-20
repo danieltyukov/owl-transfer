@@ -1413,6 +1413,85 @@ async fn a_conflict_settled_by_a_remote_delete_leaves_no_stale_copy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forgetting_a_peer_that_connected_to_us_tells_it() {
+    let a = start("Alpha").await;
+    let b = start("Beta").await;
+    // Beta dials, alpha listens. Alpha holds no dialable address for beta
+    // (the ports here are random), so it can only learn of the forget on
+    // the link itself.
+    pair(&b, &a).await;
+    a.write("shared.txt", b"before");
+    assert!(wait_for_bytes(&b, "shared.txt", b"before", WAIT).await);
+
+    b.engine.forget_peer(&a.id()).await.unwrap();
+    assert!(b.engine.state().peers.is_empty());
+    assert!(
+        wait_until(|| a.engine.state().peers.is_empty(), WAIT).await,
+        "alpha was told on the live link"
+    );
+    assert!(a
+        .engine
+        .state()
+        .errors
+        .iter()
+        .any(|e| e.contains("no longer trusts")));
+    assert!(wait_until(|| !connected_to(&b.engine, &a.id()), WAIT).await);
+
+    // Nothing lingers, and pairing again works from a clean slate.
+    b.write("later.txt", b"not for alpha");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!a.path("later.txt").exists());
+    assert!(a.engine.state().peers.is_empty() && b.engine.state().peers.is_empty());
+    pair(&b, &a).await;
+    assert!(wait_for_bytes(&a, "later.txt", b"not for alpha", WAIT).await);
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_name_change_reaches_a_connected_peer() {
+    let a = start("Alpha").await;
+    let b = start("Beta").await;
+    pair(&a, &b).await;
+    assert_eq!(a.engine.state().peers[0].name, "Beta");
+
+    b.engine
+        .set_device_name("Beta renamed".into())
+        .await
+        .unwrap();
+    assert_eq!(b.engine.state().device.name, "Beta renamed");
+    assert!(
+        wait_until(
+            || a.engine
+                .state()
+                .peers
+                .iter()
+                .any(|p| p.name == "Beta renamed"),
+            WAIT
+        )
+        .await,
+        "alpha shows the new name while connected: {:?}",
+        a.engine.state().peers
+    );
+    let peer = a.engine.state().peers[0].clone();
+    assert_eq!(peer.kind, DeviceKind::Desktop);
+    assert!(peer.connected);
+    let persisted = std::fs::read_to_string(a.data.path().join("peers.json")).unwrap();
+    assert!(
+        persisted.contains("Beta renamed"),
+        "the record is saved too"
+    );
+
+    // The link is untouched: sync goes on both ways.
+    b.write("after.txt", b"renamed and still here");
+    assert!(wait_for_bytes(&a, "after.txt", b"renamed and still here", WAIT).await);
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_and_imports_reflect_sync_status() {
     let a = start("Alpha").await;
     a.write("alone.txt", b"nobody has this yet");

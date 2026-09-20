@@ -31,6 +31,7 @@ use crate::identity::Identity;
 use crate::index::Index;
 use crate::paths::validate_rel;
 use crate::peers::PeerStore;
+use crate::proto::{Control, Frame};
 use crate::state::{DirEntry, PairingDirection, State};
 use crate::transfer::{SharedTransfers, TransferState};
 
@@ -298,6 +299,12 @@ impl Engine {
         if let Some(beacon) = &inner.beacon {
             beacon.update(self.advertisement());
         }
+        // The name rides in Hello; a fresh one on every open link carries
+        // the change to peers that are connected right now.
+        let hello = Frame::Control(self.hello());
+        for link in inner.conns.values() {
+            let _ = link.conn.try_send(hello.clone());
+        }
         drop(inner);
         self.publish_state().await;
         Ok(())
@@ -443,6 +450,14 @@ impl Engine {
             .write()
             .expect("trusted lock")
             .remove(id);
+        // Tell the peer on the live link, if there is one, so it forgets us
+        // too instead of listing a device it can never reconnect to. The
+        // writer sends what is queued before it honours the close.
+        if let Some(link) = inner.conns.get(id) {
+            let _ = link.conn.try_send(Frame::Control(Control::PairReject {
+                reason: "not paired".into(),
+            }));
+        }
         inner.conns.remove(id);
         if inner.pending.as_ref().is_some_and(|p| p.id == id) {
             if let Some(p) = inner.pending.take() {
