@@ -2,6 +2,7 @@
 //! operations the interface performs, which are indexed at once rather
 //! than waiting for the watcher.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -20,13 +21,14 @@ use crate::paths::{
 use crate::proto::{chunk_entries, Control, Frame};
 use crate::scan::{apply_hashes, apply_walk, hash_files, walk_paths, ScanOutcome};
 use crate::state::{DirEntry, EntryStatus};
-use crate::vv::VersionVector;
 use crate::watch::Watcher;
 
 impl Engine {
     /// Starts watching the folder, then indexes it in full. The watcher
-    /// goes first so nothing that changes during the scan is missed.
-    pub(crate) async fn start_folder(&self) -> Result<()> {
+    /// goes first so nothing that changes during the scan is missed. With
+    /// `floor`, every entry the scan produces starts its counter above it
+    /// (see `set_folder` and `Engine::start`).
+    pub(crate) async fn start_folder(&self, floor: Option<u64>) -> Result<()> {
         let settings = self.settings();
         let watcher = Watcher::start(
             settings.folder.clone(),
@@ -34,7 +36,8 @@ impl Engine {
             self.shared.watch_tx.clone(),
         )?;
         self.lock().await.watcher = Some(watcher);
-        self.scan_rels(&settings, vec![String::new()]).await?;
+        self.scan_rels(&settings, vec![String::new()], floor)
+            .await?;
         self.sweep_temp_files().await;
         self.mark_index();
         Ok(())
@@ -50,7 +53,7 @@ impl Engine {
             self.error("the sync folder is missing".to_string()).await;
             return;
         }
-        if let Err(e) = self.scan_rels(&settings, rels).await {
+        if let Err(e) = self.scan_rels(&settings, rels, None).await {
             self.error(format!("scanning: {e:#}")).await;
         }
         self.publish_state().await;
@@ -61,7 +64,12 @@ impl Engine {
     /// together, so a rename (a tombstone plus a new entry) reaches peers in
     /// one batch and they can copy the old file before removing it. A
     /// folder switched underneath the scan discards it.
-    async fn scan_rels(&self, settings: &Settings, rels: Vec<String>) -> Result<()> {
+    async fn scan_rels(
+        &self,
+        settings: &Settings,
+        rels: Vec<String>,
+        floor: Option<u64>,
+    ) -> Result<()> {
         let me = self.shared.identity.id.clone();
         let walked = walk_paths(&settings.folder, &rels).await?;
         let (mut out, to_hash) = {
@@ -70,7 +78,8 @@ impl Engine {
                 return Ok(());
             }
             let now = now_ms();
-            let (out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
+            let (mut out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
+            raise_counters(&mut inner, &mut out, &me, floor);
             for dir in &walked.unreadable {
                 if inner.unreadable.insert(dir.clone()) {
                     inner.push_error(format!(
@@ -91,6 +100,7 @@ impl Engine {
         }
         let now = now_ms();
         apply_hashes(&mut inner.index, hashed, &me, now, &mut out);
+        raise_counters(&mut inner, &mut out, &me, floor);
         self.absorb_local_changes(&mut inner, out, now);
         Ok(())
     }
@@ -133,9 +143,16 @@ impl Engine {
         if settings.paused || self.is_stopped() {
             return;
         }
-        let removed = tokio::task::spawn_blocking(move || sweep_temp_files(&settings.folder))
-            .await
-            .unwrap_or(0);
+        let in_flight = self
+            .shared
+            .tmp_in_flight
+            .lock()
+            .expect("in-flight lock")
+            .clone();
+        let removed =
+            tokio::task::spawn_blocking(move || sweep_temp_files(&settings.folder, &in_flight))
+                .await
+                .unwrap_or(0);
         if removed > 0 {
             debug!("removed {removed} stale temporary files");
         }
@@ -170,7 +187,7 @@ impl Engine {
                 .recent_changes
                 .get(path)
                 .is_some_and(|t| now - t < RECENT_MS);
-            if recent || inner.queued_paths.contains(path) {
+            if recent || inner.is_pending(path) {
                 return EntryStatus::Waiting;
             }
         }
@@ -227,10 +244,24 @@ pub(crate) async fn list_dir(engine: &Engine, rel: &str) -> Result<Vec<DirEntry>
 /// Temporary files older than this are stale.
 const TEMP_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// Sets every changed entry's counter to one above `floor`, under the same
+/// lock that made the entries, so no peer ever sees them lower.
+fn raise_counters(inner: &mut Inner, out: &mut ScanOutcome, me: &str, floor: Option<u64>) {
+    let Some(floor) = floor else {
+        return;
+    };
+    for entry in out.changed.iter_mut() {
+        entry.vv.clear();
+        entry.vv.insert(me.to_string(), floor + 1);
+        inner.index.insert(entry.clone());
+    }
+}
+
 /// Deletes stale `.owl-tmp-*` files under `folder`, never following links
-/// and never entering the engine's own metadata directory. Returns how
-/// many were removed.
-pub(crate) fn sweep_temp_files(folder: &Path) -> u32 {
+/// and never entering the engine's own metadata directory. Files in
+/// `in_flight` are about to be renamed into place and are left alone.
+/// Returns how many were removed.
+pub(crate) fn sweep_temp_files(folder: &Path, in_flight: &HashSet<PathBuf>) -> u32 {
     let mut removed = 0;
     let walker = walkdir::WalkDir::new(folder)
         .follow_links(false)
@@ -240,6 +271,7 @@ pub(crate) fn sweep_temp_files(folder: &Path) -> u32 {
     for entry in walker {
         if !entry.file_type().is_file()
             || !entry.file_name().to_string_lossy().starts_with(".owl-tmp-")
+            || in_flight.contains(entry.path())
         {
             continue;
         }
@@ -254,6 +286,25 @@ pub(crate) fn sweep_temp_files(folder: &Path) -> u32 {
         }
     }
     removed
+}
+
+/// Whether two paths name the same file on disk.
+fn same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+            (Ok(x), Ok(y)) => x == y,
+            _ => false,
+        }
+    }
 }
 
 fn import_tmp(dir: &Path) -> PathBuf {
@@ -407,10 +458,10 @@ pub(crate) async fn rename_entry(engine: &Engine, rel: &str, new_name: &str) -> 
     }
     let from = engine.absolute_path(rel)?;
     let to = engine.absolute_path(&new_rel)?;
-    // On a case-insensitive filesystem the target of a case-only rename
-    // is the file itself, which is fine.
-    let case_only = file_name_of(rel).to_lowercase() == new_name.to_lowercase();
-    if !case_only && tokio::fs::symlink_metadata(&to).await.is_ok() {
+    // A name that exists is only acceptable when it is the source itself,
+    // which is what a case-only rename on a case-insensitive filesystem
+    // looks like. On a case-sensitive one it is another file.
+    if tokio::fs::symlink_metadata(&to).await.is_ok() && !same_file(&from, &to) {
         bail!("{new_name} already exists");
     }
     tokio::fs::rename(&from, &to)
@@ -442,7 +493,6 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
         inner.conns.clear();
         inner.index.clear();
         inner.recent_changes.clear();
-        inner.queued_paths.clear();
         inner.unreadable.clear();
         Index::delete_file(&engine.shared.data_dir)?;
         floor
@@ -454,28 +504,13 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
         .expect("settings lock")
         .folder = path;
     if !engine.settings().paused {
-        engine.start_folder().await?;
-        let mut inner = engine.lock().await;
-        let me = engine.shared.identity.id.clone();
-        let raised: Vec<Entry> = inner
-            .index
-            .entries()
-            .map(|e| {
-                let mut e = e.clone();
-                let mut vv = VersionVector::new();
-                vv.insert(me.clone(), floor + 1);
-                e.vv = vv;
-                e
-            })
-            .collect();
-        for e in raised {
-            inner.index.insert(e);
-        }
-        let links: Vec<_> = inner.conns.values().map(|l| l.conn.clone()).collect();
-        for conn in links {
-            engine.send_full_index(&inner, &conn);
-        }
-        debug!("switched folder; {} entries indexed", inner.index.len());
+        // The scan raises every entry under its own lock, so a peer that
+        // reconnects meanwhile never sees an unraised one.
+        engine.start_folder(Some(floor)).await?;
+        debug!(
+            "switched folder; {} entries indexed",
+            engine.lock().await.index.len()
+        );
     }
     engine.mark_index();
     engine.dir_changed("");
@@ -499,9 +534,33 @@ mod tests {
         std::fs::write(&real, b"x").unwrap();
         crate::clock::set_mtime_ms(&old, crate::clock::now_ms() - 2 * 3600 * 1000).unwrap();
         crate::clock::set_mtime_ms(&real, crate::clock::now_ms() - 2 * 3600 * 1000).unwrap();
-        assert_eq!(sweep_temp_files(dir.path()), 1);
+        assert_eq!(sweep_temp_files(dir.path(), &HashSet::new()), 1);
         assert!(!old.exists());
         assert!(fresh.exists());
         assert!(real.exists());
+    }
+
+    #[test]
+    fn sweep_skips_a_file_in_flight() {
+        let dir = tempfile::tempdir().unwrap();
+        let waiting = dir.path().join(".owl-tmp-abcd-00000003");
+        std::fs::write(&waiting, b"x").unwrap();
+        crate::clock::set_mtime_ms(&waiting, crate::clock::now_ms() - 2 * 3600 * 1000).unwrap();
+        let in_flight = HashSet::from([waiting.clone()]);
+        assert_eq!(sweep_temp_files(dir.path(), &in_flight), 0);
+        assert!(waiting.exists());
+        assert_eq!(sweep_temp_files(dir.path(), &HashSet::new()), 1);
+    }
+
+    #[test]
+    fn same_file_tells_a_file_from_its_neighbour() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let b = dir.path().join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        assert!(same_file(&a, &a));
+        assert!(!same_file(&a, &b));
+        assert!(!same_file(&a, &dir.path().join("missing")));
     }
 }

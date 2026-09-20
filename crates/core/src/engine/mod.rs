@@ -65,7 +65,15 @@ pub(crate) struct Shared {
     pub(crate) stopped: AtomicBool,
     /// Connections that have not yet proven a pairing.
     pub(crate) unauthenticated: AtomicUsize,
+    /// Downloads a peer may have queued at once; the rest wait as deferred.
+    pub(crate) queue_cap: AtomicUsize,
+    /// Temporary files between having their mtime set and being renamed
+    /// into place; the stale-file sweep leaves them alone.
+    pub(crate) tmp_in_flight: std::sync::Mutex<HashSet<PathBuf>>,
 }
+
+/// Downloads a peer may have queued at once.
+const DEFAULT_QUEUE_CAP: usize = 10_000;
 
 impl Engine {
     pub async fn start(config: Config) -> Result<Engine> {
@@ -75,8 +83,19 @@ impl Engine {
             .with_context(|| format!("creating {}", config.folder.display()))?;
         let identity = Identity::load_or_create(&config.data_dir)?;
         let (peers, peers_note) = PeerStore::load_with_note(&config.data_dir)?;
+        let index_existed = config.data_dir.join("index.json").exists();
         let (mut index, index_note) = Index::load_with_note(&config.data_dir)?;
         index.remove_tombstones_older_than(now_ms() - TOMBSTONE_TTL_MS);
+        // Without the old index, fresh entries would start at one and be
+        // dominated by whatever a peer holds for the same paths, letting it
+        // replace local edits silently. A floor no counter can have reached
+        // makes the first exchange concurrent instead, so a differing file
+        // becomes a conflict copy.
+        let floor = if index_note.is_some() || (!index_existed && !peers.is_empty()) {
+            Some((now_ms() / 1000) as u64)
+        } else {
+            None
+        };
 
         let listener =
             TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.tcp_port)))
@@ -117,6 +136,8 @@ impl Engine {
                 tasks: std::sync::Mutex::new(Vec::new()),
                 stopped: AtomicBool::new(false),
                 unauthenticated: AtomicUsize::new(0),
+                queue_cap: AtomicUsize::new(DEFAULT_QUEUE_CAP),
+                tmp_in_flight: std::sync::Mutex::new(HashSet::new()),
             }),
         };
 
@@ -136,7 +157,7 @@ impl Engine {
             engine.lock().await.beacon = Some(beacon);
         }
         if !config.paused {
-            engine.start_folder().await?;
+            engine.start_folder(floor).await?;
         }
         tasks::spawn_all(&engine, listener, watch_rx, beacon_rx, retry_rx);
         engine.publish_state().await;
@@ -159,6 +180,14 @@ impl Engine {
 
     pub fn local_port(&self) -> u16 {
         self.shared.local_port
+    }
+
+    /// Lowers how many downloads a peer may have queued at once. The rest
+    /// wait as deferred entries and are offered as the queue drains. For
+    /// tests; the default is ten thousand.
+    #[doc(hidden)]
+    pub fn set_download_queue_cap(&self, cap: usize) {
+        self.shared.queue_cap.store(cap.max(1), Ordering::Relaxed);
     }
 
     /// Bytes moved over the network so far, in either direction. Local
@@ -256,8 +285,7 @@ impl Engine {
             let mut inner = self.lock().await;
             inner.watcher = None;
             inner.conns.clear();
-            inner.queued_paths.clear();
-        } else if let Err(e) = self.start_folder().await {
+        } else if let Err(e) = self.start_folder(None).await {
             self.error(format!("resuming: {e:#}")).await;
         }
         self.publish_state().await;
@@ -367,7 +395,6 @@ impl Engine {
             p.conn.close();
         }
         inner.conns.clear();
-        inner.queued_paths.clear();
         if let Err(e) = inner.index.save(&self.shared.data_dir) {
             tracing::error!("saving the index at shutdown: {e:#}");
         }

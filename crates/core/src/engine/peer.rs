@@ -1,7 +1,7 @@
 //! Connection lifecycle: incoming and outgoing connections, the pairing
 //! exchange, the per-peer frame loop, block serving and the download worker.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -86,8 +86,7 @@ pub(crate) async fn handle_incoming(engine: Engine, tcp: TcpStream) {
         drop(guard);
         run_peer(engine, conn, rx).await;
     } else {
-        incoming_pairing(engine, conn, rx).await;
-        drop(guard);
+        incoming_pairing(engine, conn, rx, guard).await;
     }
 }
 
@@ -252,8 +251,14 @@ async fn cool_down(engine: &Engine, ip: IpAddr) {
         .insert(ip, now_ms() + PAIR_COOLDOWN_MS);
 }
 
-/// The acceptor's side of the exchange.
-async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiver<Frame>) {
+/// The acceptor's side of the exchange. `guard` holds one of the
+/// unauthenticated slots until the pairing is decided.
+async fn incoming_pairing(
+    engine: Engine,
+    conn: Connection,
+    mut rx: mpsc::Receiver<Frame>,
+    guard: UnauthGuard,
+) {
     let request = timeout(PAIR_REQUEST_WAIT, rx.recv()).await;
     let (id, name, kind, commit) = match request {
         Ok(Some(Frame::Control(Control::PairRequest {
@@ -350,6 +355,8 @@ async fn incoming_pairing(engine: Engine, conn: Connection, mut rx: mpsc::Receiv
     match decision {
         Some(true) => {
             store_peer(&engine, &conn).await;
+            // Paired now: the slot is free for the next stranger.
+            drop(guard);
             if conn.send(Frame::Control(Control::PairAccept)).await.is_ok() {
                 info!("paired with {} ({})", conn.peer_name, conn.peer_id);
                 run_peer(engine, conn, rx).await;
@@ -483,6 +490,7 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
             queue: queue_tx,
             queue_len,
             deferred: Vec::new(),
+            pending: HashSet::new(),
             worker,
         },
     );
@@ -697,6 +705,7 @@ async fn download_worker(
                     let mut inner = engine.lock().await;
                     if let Some(link) = inner.conns.get_mut(&requester.conn().peer_id) {
                         if link.link_id == link_id {
+                            link.pending.insert(entry.path.clone());
                             link.deferred.push(Deferred {
                                 entry,
                                 retry_at_ms: now_ms() + wait,
@@ -717,41 +726,26 @@ impl Engine {
         if !inner.is_linked(peer_id, link_id) {
             return;
         }
-        let path = entry.path.clone();
-        let queued = inner
-            .conns
-            .get(peer_id)
-            .is_some_and(|link| link.enqueue(entry));
-        if queued {
-            inner.queued_paths.insert(path);
-            self.shared()
-                .transfers
-                .lock()
-                .expect("transfers lock")
-                .adjust_queued(1);
-        }
+        self.queue_download(&mut inner, peer_id, entry);
     }
 
-    /// Offers deferred downloads whose time has come. Called from the
-    /// housekeeping tick.
+    /// Offers deferred downloads whose time has come, as far as the queue
+    /// cap allows; the rest stay deferred and are tried on the next tick.
+    /// Called from the housekeeping tick.
     pub(crate) fn requeue_deferred(&self, inner: &mut Inner, now: i64) {
-        let mut requeued = 0;
+        let cap = self.shared().queue_cap.load(Ordering::Relaxed);
         for link in inner.conns.values_mut() {
-            let (due, later): (Vec<Deferred>, Vec<Deferred>) =
+            let (due, mut later): (Vec<Deferred>, Vec<Deferred>) =
                 link.deferred.drain(..).partition(|d| d.retry_at_ms <= now);
-            link.deferred = later;
             for d in due {
-                if link.enqueue(d.entry) {
-                    requeued += 1;
+                if let Err(entry) = link.enqueue(d.entry, cap) {
+                    later.push(Deferred {
+                        entry,
+                        retry_at_ms: now,
+                    });
                 }
             }
-        }
-        if requeued > 0 {
-            self.shared()
-                .transfers
-                .lock()
-                .expect("transfers lock")
-                .adjust_queued(requeued);
+            link.deferred = later;
         }
     }
 }

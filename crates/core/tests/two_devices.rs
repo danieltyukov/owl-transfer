@@ -270,6 +270,47 @@ async fn raw_pair(a: &Device, name: &str) -> Raw {
     raw
 }
 
+/// Answers block requests from `files` (path to bytes) and pings until the
+/// connection closes, so the engine can fetch what the raw peer announced.
+fn serve_raw(mut raw: Raw, files: std::collections::HashMap<String, Vec<u8>>) {
+    tokio::spawn(async move {
+        while let Some(frame) = raw.rx.recv().await {
+            match frame {
+                Frame::Control(Control::Ping) => {
+                    let _ = raw.conn.send(Frame::Control(Control::Pong)).await;
+                }
+                Frame::Control(Control::Request {
+                    req_id,
+                    path,
+                    offset,
+                    len,
+                    ..
+                }) => {
+                    let block = files.get(&path).map(|bytes| {
+                        let start = (offset as usize).min(bytes.len());
+                        let end = (start + len as usize).min(bytes.len());
+                        bytes::Bytes::copy_from_slice(&bytes[start..end])
+                    });
+                    let frame = match block {
+                        Some(data) => Frame::Block {
+                            req_id,
+                            status: 0,
+                            data,
+                        },
+                        None => Frame::Block {
+                            req_id,
+                            status: 1,
+                            data: bytes::Bytes::new(),
+                        },
+                    };
+                    let _ = raw.conn.send(frame).await;
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 fn wire_entry(path: &str, kind: EntryKind, hash: Option<&str>, size: u64, author: &str) -> Entry {
     Entry {
         path: path.into(),
@@ -760,6 +801,115 @@ async fn forget_peer_disconnects_and_refuses() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn damaged_index_yields_a_conflict_copy_not_a_silent_replace() {
+    let a = start("Alpha").await;
+    let mut b = start("Beta").await;
+    pair(&a, &b).await;
+
+    a.write("doc.txt", b"v1");
+    assert!(wait_for_bytes(&b, "doc.txt", b"v1", WAIT).await);
+    b.engine.shutdown().await;
+    assert!(wait_until(|| !connected_to(&a.engine, &b.id()), WAIT).await);
+
+    // Beta's index is damaged while both sides edit the same file.
+    std::fs::write(b.data.path().join("index.json"), b"{broken").unwrap();
+    a.write("doc.txt", b"Alpha edit");
+    assert!(wait_until(|| a.engine.state().summary.bytes == 10, WAIT).await);
+    b.write("doc.txt", b"Beta edit, newer");
+    let newer = mtime_ms(&a.path("doc.txt")) + 5000;
+    owl_core::clock::set_mtime_ms(&b.path("doc.txt"), newer).unwrap();
+
+    b.restart().await;
+    assert!(b
+        .engine
+        .state()
+        .errors
+        .iter()
+        .any(|e| e.contains("unreadable")));
+    assert!(
+        wait_until(
+            || connected_to(&a.engine, &b.id()) && connected_to(&b.engine, &a.id()),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+
+    // Without the old counters beta's entry would be dominated and alpha's
+    // copy would replace it silently; the floor makes it a conflict.
+    let settled = |d: &Device| {
+        let files = d.files();
+        files.len() == 2
+            && d.read("doc.txt").as_deref() == Some(b"Beta edit, newer".as_slice())
+            && files.iter().any(|f| {
+                f.starts_with("doc (conflict from Alpha ")
+                    && d.read(f).as_deref() == Some(b"Alpha edit".as_slice())
+            })
+    };
+    assert!(
+        wait_until(|| settled(&a) && settled(&b), RECONNECT_WAIT).await,
+        "alpha: {:?}, beta: {:?}",
+        a.files(),
+        b.files()
+    );
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn downloads_past_the_queue_cap_are_still_fetched() {
+    let a = start("Alpha").await;
+    a.engine.set_download_queue_cap(3);
+    let raw = raw_pair(&a, "Server").await;
+    let me = raw.identity.id.clone();
+
+    let mut files = std::collections::HashMap::new();
+    let mut entries = Vec::new();
+    for i in 0..10 {
+        let path = format!("f{i:02}.bin");
+        let bytes = format!("content of file {i}").into_bytes();
+        entries.push(wire_entry(
+            &path,
+            EntryKind::File,
+            Some(&blake3_hex(&bytes)),
+            bytes.len() as u64,
+            &me,
+        ));
+        files.insert(path, bytes);
+    }
+    raw.conn
+        .send(Frame::Control(Control::IndexUpdate { entries }))
+        .await
+        .unwrap();
+    serve_raw(raw, files.clone());
+
+    // Three at a time, the rest topped up from the deferred list each tick.
+    assert!(
+        wait_until(
+            || files
+                .iter()
+                .all(|(path, bytes)| a.read(path).as_deref() == Some(bytes.as_slice())),
+            Duration::from_secs(20)
+        )
+        .await,
+        "have {:?}",
+        a.files()
+    );
+    assert!(
+        wait_until(
+            || {
+                let s = a.engine.state();
+                s.transfers.queued == 0 && s.summary.files == 10 && s.summary.up_to_date
+            },
+            WAIT
+        )
+        .await
+    );
+
+    a.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_and_imports_reflect_sync_status() {
     let a = start("Alpha").await;
     a.write("alone.txt", b"nobody has this yet");
@@ -849,6 +999,22 @@ async fn listing_and_imports_reflect_sync_status() {
         listing.iter().all(|e| e.status == EntryStatus::Synced),
         "{listing:?}"
     );
+
+    // On a case-sensitive filesystem a name differing only in case is a
+    // different file, and a rename onto it must be refused like any other.
+    a.write("Report.txt", b"upper");
+    a.write("report.txt", b"lower");
+    let distinct = a.read("Report.txt").as_deref() == Some(b"upper".as_slice())
+        && a.read("report.txt").as_deref() == Some(b"lower".as_slice());
+    if distinct {
+        assert!(a
+            .engine
+            .rename_entry("Report.txt", "report.txt")
+            .await
+            .is_err());
+        assert_eq!(a.read("Report.txt").as_deref(), Some(b"upper".as_slice()));
+        assert_eq!(a.read("report.txt").as_deref(), Some(b"lower".as_slice()));
+    }
 
     let events = a.engine.dir_events();
     drop(events);
