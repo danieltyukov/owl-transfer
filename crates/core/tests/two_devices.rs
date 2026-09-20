@@ -1309,6 +1309,57 @@ async fn a_pause_that_overtakes_a_resume_wins() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paused_engine_keeps_its_links_and_catches_up_on_resume() {
+    let a = start("Alpha").await;
+    let b = start("Beta").await;
+    pair(&a, &b).await;
+    a.write("shared.txt", b"v1");
+    assert!(wait_for_bytes(&b, "shared.txt", b"v1", WAIT).await);
+
+    // Beta pauses. Through more than a dial cycle both sides stay linked
+    // and nobody is forgotten.
+    b.engine.set_paused(true).await;
+    for _ in 0..12 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(connected_to(&a.engine, &b.id()));
+        assert!(connected_to(&b.engine, &a.id()));
+    }
+    let untouched = |e: &Engine| {
+        e.state()
+            .errors
+            .iter()
+            .all(|m| !m.contains("no longer trusts"))
+    };
+    assert!(untouched(&a.engine) && untouched(&b.engine));
+    assert_eq!(a.engine.state().peers.len(), 1);
+    assert_eq!(b.engine.state().peers.len(), 1);
+
+    // What alpha changes meanwhile is held, not applied.
+    a.write("new.txt", b"made while paused");
+    a.write("shared.txt", b"v2 while paused");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!b.path("new.txt").exists());
+    assert_eq!(b.read("shared.txt").as_deref(), Some(b"v1".as_slice()));
+    let listing = b.engine.list_dir("").await.unwrap();
+    let shared = listing.iter().find(|e| e.name == "shared.txt").unwrap();
+    assert_eq!(shared.status, EntryStatus::Waiting, "{listing:?}");
+    assert!(!b.engine.state().summary.up_to_date);
+    assert!(connected_to(&a.engine, &b.id()));
+
+    // Resume: the exchange happens as on a new connection.
+    b.engine.set_paused(false).await;
+    assert!(!b.engine.state().paused);
+    assert!(wait_for_bytes(&b, "new.txt", b"made while paused", WAIT).await);
+    assert!(wait_for_bytes(&b, "shared.txt", b"v2 while paused", WAIT).await);
+    b.write("back.txt", b"from beta after the resume");
+    assert!(wait_for_bytes(&a, "back.txt", b"from beta after the resume", WAIT).await);
+    assert!(untouched(&a.engine) && untouched(&b.engine));
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_and_imports_reflect_sync_status() {
     let a = start("Alpha").await;
     a.write("alone.txt", b"nobody has this yet");

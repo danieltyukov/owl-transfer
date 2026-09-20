@@ -303,11 +303,14 @@ impl Engine {
         Ok(())
     }
 
-    /// Paused: no watching, scanning, dialling or syncing. Pairing still
-    /// works so a phone can pair before it has storage access. Resuming
-    /// creates the folder, starts the watcher and runs the first scan; if
-    /// any of that fails the engine stays paused and says why in `errors`,
-    /// so the person can fix the folder and try again.
+    /// Paused: no watching, scanning or syncing. Paired links stay open:
+    /// nothing is sent or adopted on them and block requests are answered
+    /// as unavailable, and pairing still works so a phone can pair before
+    /// it has storage access. Resuming creates the folder, starts the
+    /// watcher, runs the first scan, then sends the full index to every
+    /// link and applies what the peers announced meanwhile, exactly as on
+    /// a new connection. If the resume fails the engine stays paused and
+    /// says why in `errors`, so the person can fix the folder and try again.
     pub async fn set_paused(&self, paused: bool) {
         let was = std::mem::replace(
             &mut self.shared.settings.write().expect("settings lock").paused,
@@ -317,9 +320,7 @@ impl Engine {
             return;
         }
         if paused {
-            let mut inner = self.lock().await;
-            inner.watcher = None;
-            inner.conns.clear();
+            self.lock().await.watcher = None;
         } else {
             let folder = self.folder();
             let resumed = async {
@@ -334,22 +335,44 @@ impl Engine {
                     self.shared.settings.write().expect("settings lock").paused = true;
                     let mut inner = self.lock().await;
                     inner.watcher = None;
-                    // A link registered in the short unpaused window would
-                    // show as connected while paused.
-                    inner.conns.clear();
                     inner.push_error(format!("cannot resume syncing: {e:#}"));
                 }
                 Ok(()) if self.settings().paused => {
                     // A pause overtook the resume: it wins, and whatever the
                     // resume set up on its way is taken down again.
-                    let mut inner = self.lock().await;
-                    inner.watcher = None;
-                    inner.conns.clear();
+                    self.lock().await.watcher = None;
                 }
-                Ok(()) => {}
+                Ok(()) => self.resume_links().await,
             }
         }
         self.publish_state().await;
+    }
+
+    /// After a resume: the full index to every link, then whatever the
+    /// peers announced while paused, as if each had just connected.
+    async fn resume_links(&self) {
+        let replay: Vec<(String, u64, Vec<crate::index::Entry>)> = {
+            let mut inner = self.lock().await;
+            let conns: Vec<_> = inner.conns.values().map(|l| l.conn.clone()).collect();
+            for conn in &conns {
+                self.send_full_index(&inner, conn);
+            }
+            inner
+                .conns
+                .values_mut()
+                .filter(|l| !l.held.is_empty())
+                .map(|l| {
+                    (
+                        l.conn.peer_id.clone(),
+                        l.link_id,
+                        l.held.drain().map(|(_, e)| e).collect(),
+                    )
+                })
+                .collect()
+        };
+        for (peer_id, link_id, entries) in replay {
+            self.on_remote_entries(&peer_id, link_id, entries).await;
+        }
     }
 
     pub async fn rescan(&self) -> Result<()> {

@@ -84,7 +84,6 @@ async fn watcher_consumer(engine: Engine, mut rx: mpsc::Receiver<Vec<String>>) {
 
 async fn beacon_consumer(engine: Engine, mut rx: mpsc::Receiver<Heard>) {
     while let Some(heard) = rx.recv().await {
-        let settings = engine.settings();
         let mut inner = engine.lock().await;
         // Beacons are unauthenticated, so they only steer the next dial;
         // the stored address is written after an authenticated connection.
@@ -96,10 +95,8 @@ async fn beacon_consumer(engine: Engine, mut rx: mpsc::Receiver<Heard>) {
             old.name != heard.name || old.addr != heard.addr || old.kind != heard.kind
         });
         inner.nearby.insert(heard.id.clone(), heard.clone());
-        let should_dial = paired
-            && !settings.paused
-            && !inner.conns.contains_key(&heard.id)
-            && !inner.dialing.contains(&heard.id);
+        let should_dial =
+            paired && !inner.conns.contains_key(&heard.id) && !inner.dialing.contains(&heard.id);
         if should_dial {
             inner.dialing.insert(heard.id.clone());
             tokio::spawn(dial_peer(engine.clone(), heard.id.clone(), heard.addr));
@@ -113,7 +110,7 @@ async fn beacon_consumer(engine: Engine, mut rx: mpsc::Receiver<Heard>) {
 
 async fn dial_loop(engine: Engine) {
     loop {
-        if !engine.settings().paused {
+        {
             let targets: Vec<(String, SocketAddr)> = {
                 let mut inner = engine.lock().await;
                 let mut targets = Vec::new();

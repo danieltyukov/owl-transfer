@@ -74,7 +74,18 @@ impl Engine {
     /// dropped.
     pub(crate) async fn on_remote_entries(&self, peer_id: &str, link_id: u64, entries: Vec<Entry>) {
         let settings = self.settings();
-        if settings.paused || self.is_stopped() {
+        if self.is_stopped() {
+            return;
+        }
+        if settings.paused {
+            // Nothing is adopted while paused; the peer's entries wait on
+            // the link and are applied on resume.
+            let mut inner = self.lock().await;
+            for entry in entries {
+                inner.hold(peer_id, link_id, entry);
+            }
+            drop(inner);
+            self.mark_state();
             return;
         }
         let mut live = Vec::new();
@@ -512,7 +523,11 @@ impl Engine {
         }
         self.mark_state();
         let settings = self.settings();
-        if settings.paused || self.is_stopped() {
+        if self.is_stopped() {
+            return Ok(());
+        }
+        if settings.paused {
+            self.lock().await.hold(&peer_id, link_id, entry);
             return Ok(());
         }
 
@@ -544,12 +559,20 @@ impl Engine {
                 .await?
             }
         };
-        if self.settings().folder != settings.folder {
+        let current = self.settings();
+        if current.folder != settings.folder {
             // The folder was switched while the bytes were on their way.
             let _ = tokio::fs::remove_file(&tmp).await;
             return Ok(());
         }
         let mut inner = self.lock().await;
+        if current.paused {
+            // A pause landed while the bytes were on their way: nothing is
+            // installed while paused; the entry waits for the resume.
+            let _ = tokio::fs::remove_file(&tmp).await;
+            inner.hold(&peer_id, link_id, entry);
+            return Ok(());
+        }
         self.install_file(&mut inner, &peer_id, &settings, entry, tmp, now_ms())
             .await
     }
