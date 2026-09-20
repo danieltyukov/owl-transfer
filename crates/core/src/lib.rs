@@ -2,6 +2,7 @@
 //! change detection and sync, with one `Engine` type as the public surface.
 //! See docs/ARCHITECTURE.md for the model this implements.
 
+pub mod beacon;
 pub mod clock;
 pub mod config;
 pub mod conn;
