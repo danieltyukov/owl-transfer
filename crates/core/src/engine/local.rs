@@ -21,6 +21,7 @@ use crate::paths::{
 use crate::proto::{chunk_entries, Control, Frame};
 use crate::scan::{apply_hashes, apply_walk, hash_files, walk_paths, ScanOutcome};
 use crate::state::{DirEntry, EntryStatus};
+use crate::vv::bump;
 use crate::watch::Watcher;
 
 impl Engine {
@@ -35,8 +36,16 @@ impl Engine {
             self.shared.poll_watch,
             self.shared.watch_tx.clone(),
         )?;
-        self.lock().await.watcher = Some(watcher);
-        self.scan_rels(&settings, vec![String::new()], floor)
+        {
+            // A pause that landed while the watcher was being made wins:
+            // nothing is installed and nothing is scanned.
+            let mut inner = self.lock().await;
+            if self.settings().paused {
+                return Ok(());
+            }
+            inner.watcher = Some(watcher);
+        }
+        self.scan_rels(&settings, vec![String::new()], floor, true)
             .await?;
         if let Some(floor) = floor {
             self.raise_all(floor).await;
@@ -58,7 +67,7 @@ impl Engine {
             .filter(|e| e.vv.get(&me).copied().unwrap_or(0) <= floor)
             .map(|e| {
                 let mut e = e.clone();
-                e.vv.insert(me.clone(), floor + 1);
+                bump(&mut e.vv, &me, floor);
                 e
             })
             .collect();
@@ -83,7 +92,7 @@ impl Engine {
             self.error("the sync folder is missing".to_string()).await;
             return;
         }
-        if let Err(e) = self.scan_rels(&settings, rels, None).await {
+        if let Err(e) = self.scan_rels(&settings, rels, None, false).await {
             self.error(format!("scanning: {e:#}")).await;
         }
         self.publish_state().await;
@@ -93,18 +102,23 @@ impl Engine {
     /// the index. What the walk found and what hashing found are announced
     /// together, so a rename (a tombstone plus a new entry) reaches peers in
     /// one batch and they can copy the old file before removing it. A
-    /// folder switched underneath the scan discards it.
+    /// folder switched underneath the scan, or a pause that landed, makes
+    /// it stop before touching the index; the next first scan catches up.
+    /// `first` marks the scan a start, resume or switch runs, which is
+    /// where the test hook's hash delay applies.
     async fn scan_rels(
         &self,
         settings: &Settings,
         rels: Vec<String>,
         floor: Option<u64>,
+        first: bool,
     ) -> Result<()> {
         let me = self.shared.identity.id.clone();
         let walked = walk_paths(&settings.folder, &rels).await?;
         let (mut out, to_hash) = {
             let mut inner = self.lock().await;
-            if self.settings().folder != settings.folder {
+            let current = self.settings();
+            if current.folder != settings.folder || current.paused {
                 return Ok(());
             }
             let now = now_ms();
@@ -124,7 +138,7 @@ impl Engine {
             (out, to_hash)
         };
         let raised_upto = out.changed.len();
-        if floor.is_some() {
+        if first {
             let delay = self
                 .shared
                 .hash_delay_ms
@@ -135,7 +149,8 @@ impl Engine {
         }
         let hashed = hash_files(&settings.folder, to_hash).await;
         let mut inner = self.lock().await;
-        if self.settings().folder != settings.folder {
+        let current = self.settings();
+        if current.folder != settings.folder || current.paused {
             return Ok(());
         }
         let now = now_ms();
@@ -296,13 +311,14 @@ fn raise_counters(
     let Some(floor) = floor else {
         return;
     };
-    // Only the entries this phase produced: the walk phase's were raised
-    // already, and a vector a peer merged into one of them meanwhile
-    // must not be thrown away.
+    // Only the entries this phase produced, and only on top of what they
+    // hold: a vector a peer merged in meanwhile is kept, and an entry the
+    // scan already bumped above the floor is left alone.
     for entry in out.changed.iter_mut().skip(from) {
-        entry.vv.clear();
-        entry.vv.insert(me.to_string(), floor + 1);
-        inner.index.insert(entry.clone());
+        if entry.vv.get(me).copied().unwrap_or(0) <= floor {
+            bump(&mut entry.vv, me, floor);
+            inner.index.insert(entry.clone());
+        }
     }
 }
 
@@ -544,6 +560,7 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
         inner.index.clear();
         inner.recent_changes.clear();
         inner.unreadable.clear();
+        inner.losing.clear();
         Index::delete_file(&engine.shared.data_dir)?;
         floor
     };

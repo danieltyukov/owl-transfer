@@ -58,6 +58,9 @@ pub(crate) struct PeerLink {
     /// Every path this link still has to fetch, queued or deferred, for
     /// the `Waiting` status and the queued count. Goes away with the link.
     pub pending: HashSet<String>,
+    /// What the peer announced while this engine was paused, latest entry
+    /// per path, applied on resume as if the peer had just connected.
+    pub held: HashMap<String, Entry>,
     pub worker: JoinHandle<()>,
     /// Shared so dropping the link can forget its transfers in flight.
     pub transfers: crate::transfer::SharedTransfers,
@@ -123,6 +126,10 @@ pub(crate) struct Inner {
     pub dialing: HashSet<String>,
     /// Directory tombstones given one more chance to apply.
     pub tombstone_retries: HashSet<String>,
+    /// Paths whose live local file lost a conflict to a peer's version: a
+    /// copy of it is kept before anything replaces it, whichever entry
+    /// arrives first to do so.
+    pub losing: HashSet<String>,
     /// This machine's IPv4 addresses, refreshed by the housekeeping tick.
     pub addresses: Vec<String>,
     /// Addresses that may not ask to pair until the given time.
@@ -149,6 +156,7 @@ impl Inner {
             last_change_ms: None,
             dialing: HashSet::new(),
             tombstone_retries: HashSet::new(),
+            losing: HashSet::new(),
             addresses: crate::beacon::local_ipv4_addresses(),
             pairing_cooldown: HashMap::new(),
             unreadable: HashSet::new(),
@@ -157,9 +165,21 @@ impl Inner {
         }
     }
 
-    /// Whether any link still has to fetch `path`.
+    /// Whether any link still has to fetch `path`, or holds a peer's entry
+    /// for it while paused.
     pub fn is_pending(&self, path: &str) -> bool {
-        self.conns.values().any(|l| l.pending.contains(path))
+        self.conns
+            .values()
+            .any(|l| l.pending.contains(path) || l.held.contains_key(path))
+    }
+
+    /// Parks a peer's entry until the engine resumes.
+    pub fn hold(&mut self, peer_id: &str, link_id: u64, entry: Entry) {
+        if let Some(link) = self.conns.get_mut(peer_id) {
+            if link.link_id == link_id {
+                link.held.insert(entry.path.clone(), entry);
+            }
+        }
     }
 
     /// Downloads waiting across all links.

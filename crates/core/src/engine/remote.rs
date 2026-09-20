@@ -74,7 +74,18 @@ impl Engine {
     /// dropped.
     pub(crate) async fn on_remote_entries(&self, peer_id: &str, link_id: u64, entries: Vec<Entry>) {
         let settings = self.settings();
-        if settings.paused || self.is_stopped() {
+        if self.is_stopped() {
+            return;
+        }
+        if settings.paused {
+            // Nothing is adopted while paused; the peer's entries wait on
+            // the link and are applied on resume.
+            let mut inner = self.lock().await;
+            for entry in entries {
+                inner.hold(peer_id, link_id, entry);
+            }
+            drop(inner);
+            self.mark_state();
             return;
         }
         let mut live = Vec::new();
@@ -240,17 +251,32 @@ impl Engine {
                 winner_remote: false,
             } => {
                 let local = local.expect("a conflict has a local entry");
-                let (winner, _) = resolve_conflict(
-                    &mut inner.index,
-                    &local,
-                    &remote,
-                    false,
-                    &me,
-                    &settings.device_name,
-                    now,
-                );
-                inner.recent_changes.insert(winner.path.clone(), now);
-                announce.push(winner);
+                if remote.deleted {
+                    // A deletion never destroys an edit: keep ours and bump
+                    // so the peer takes the file back.
+                    let (winner, _) = resolve_conflict(
+                        &mut inner.index,
+                        &local,
+                        &remote,
+                        false,
+                        &me,
+                        &settings.device_name,
+                        now,
+                    );
+                    inner.recent_changes.insert(winner.path.clone(), now);
+                    announce.push(winner);
+                } else {
+                    // Ours wins, and the losing side is the one to keep a
+                    // copy: the peer sees this same conflict from the other
+                    // end, moves its file aside, takes ours and announces the
+                    // merged winner. Announcing a dominating winner from here
+                    // would let the peer replace its file with no copy if its
+                    // own conflict download happened to fail once.
+                    debug!(
+                        "{} wins the conflict over {}; the peer keeps the copy",
+                        remote.path, peer_id
+                    );
+                }
             }
             Decision::Conflict {
                 winner_remote: true,
@@ -260,6 +286,9 @@ impl Engine {
                     self.dir_over_file(inner, settings, &local, &remote, now, announce)
                         .await;
                 } else {
+                    if local.as_ref().is_some_and(|l| l.is_live_file()) {
+                        inner.losing.insert(remote.path.clone());
+                    }
                     self.want_bytes(inner, peer_id, settings, remote, copies);
                 }
             }
@@ -318,6 +347,7 @@ impl Engine {
                 }
             }
             apply_adopt(&mut inner.index, &remote, now);
+            inner.losing.remove(&remote.path);
             inner.last_change_ms = Some(now);
         } else if remote.kind == EntryKind::Dir {
             let abs = match safe_abs(folder, &remote.path) {
@@ -493,7 +523,11 @@ impl Engine {
         }
         self.mark_state();
         let settings = self.settings();
-        if settings.paused || self.is_stopped() {
+        if self.is_stopped() {
+            return Ok(());
+        }
+        if settings.paused {
+            self.lock().await.hold(&peer_id, link_id, entry);
             return Ok(());
         }
 
@@ -525,12 +559,20 @@ impl Engine {
                 .await?
             }
         };
-        if self.settings().folder != settings.folder {
+        let current = self.settings();
+        if current.folder != settings.folder {
             // The folder was switched while the bytes were on their way.
             let _ = tokio::fs::remove_file(&tmp).await;
             return Ok(());
         }
         let mut inner = self.lock().await;
+        if current.paused {
+            // A pause landed while the bytes were on their way: nothing is
+            // installed while paused; the entry waits for the resume.
+            let _ = tokio::fs::remove_file(&tmp).await;
+            inner.hold(&peer_id, link_id, entry);
+            return Ok(());
+        }
         self.install_file(&mut inner, &peer_id, &settings, entry, tmp, now_ms())
             .await
     }
@@ -561,7 +603,20 @@ impl Engine {
             }
         };
         let local = inner.index.get(&remote.path).cloned();
-        let decision = decide(local.as_ref(), &remote, me, peer_id);
+        let mut decision = decide(local.as_ref(), &remote, me, peer_id);
+        // A live file that lost a conflict is copied aside before any
+        // replacement, even one that arrives as a plain dominating entry
+        // (the peer's further edits, or its own resolution of the same
+        // conflict), so the losing edit is never silently gone.
+        if decision == Decision::Adopt
+            && inner.losing.contains(&remote.path)
+            && local.as_ref().is_some_and(|l| l.is_live_file())
+            && needs_bytes(local.as_ref(), &remote)
+        {
+            decision = Decision::Conflict {
+                winner_remote: true,
+            };
+        }
         let wants_bytes = matches!(
             decision,
             Decision::Adopt
@@ -590,6 +645,7 @@ impl Engine {
                     let _ = set_mtime_ms(&dest, remote.mtime_ms);
                 }
                 apply_adopt(&mut inner.index, &remote, now);
+                inner.losing.remove(&remote.path);
                 self.mark_index();
                 return Ok(());
             }
@@ -640,6 +696,7 @@ impl Engine {
                     inner.recent_changes.insert(loser.path.clone(), now);
                     announce.push(loser);
                 }
+                inner.losing.remove(&remote.path);
                 inner.recent_changes.insert(winner.path.clone(), now);
                 announce.push(winner);
             }

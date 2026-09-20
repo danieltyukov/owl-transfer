@@ -455,7 +455,7 @@ async fn forget_because_refused(engine: &Engine, conn: &Connection) {
 /// survives, so both sides keep the same one.
 async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<Requester>)> {
     let mut inner = engine.lock().await;
-    if !inner.peers.contains(&conn.peer_id) || engine.settings().paused || engine.is_stopped() {
+    if !inner.peers.contains(&conn.peer_id) || engine.is_stopped() {
         return None;
     }
     if let Some(existing) = inner.conns.get(&conn.peer_id) {
@@ -491,6 +491,7 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
             queue_len,
             deferred: Vec::new(),
             pending: HashSet::new(),
+            held: HashMap::new(),
             worker,
             transfers: engine.shared().transfers.clone(),
         },
@@ -526,7 +527,10 @@ pub(crate) async fn run_peer(engine: Engine, conn: Connection, mut rx: mpsc::Rec
         return;
     };
     info!("connected to {} ({})", conn.peer_name, peer_id);
-    {
+    if engine.settings().paused {
+        // The link stays open while paused; the exchange happens on resume.
+        debug!("paused: holding the index exchange with {}", conn.peer_name);
+    } else {
         let mut inner = engine.lock().await;
         engine.send_full_index(&inner, &conn);
         // A missed event can never be permanent: every new connection asks
@@ -618,6 +622,22 @@ async fn serve(
         });
         return;
     };
+    let failing = engine
+        .shared()
+        .fail_blocks
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_ok();
+    // A paused engine serves nothing: its folder may not even be readable.
+    if failing || engine.settings().paused {
+        let _ = conn
+            .send(Frame::Block {
+                req_id,
+                status: BLOCK_UNAVAILABLE,
+                data: bytes::Bytes::new(),
+            })
+            .await;
+        return;
+    }
     let settings = engine.settings();
     let served = {
         let inner = engine.lock().await;

@@ -70,6 +70,9 @@ pub(crate) struct Shared {
     /// A pause before the hash phase of a floor scan, so tests can make a
     /// peer reconnect in the middle of one. Zero in production.
     pub(crate) hash_delay_ms: std::sync::atomic::AtomicU64,
+    /// Block requests to answer "unavailable" before serving again, so
+    /// tests can make a peer's download fail once. Zero in production.
+    pub(crate) fail_blocks: std::sync::atomic::AtomicU32,
     /// Temporary files between having their mtime set and being renamed
     /// into place; the stale-file sweep leaves them alone.
     pub(crate) tmp_in_flight: std::sync::Mutex<HashSet<PathBuf>>,
@@ -147,6 +150,7 @@ impl Engine {
                 unauthenticated: AtomicUsize::new(0),
                 queue_cap: AtomicUsize::new(DEFAULT_QUEUE_CAP),
                 hash_delay_ms: std::sync::atomic::AtomicU64::new(0),
+                fail_blocks: std::sync::atomic::AtomicU32::new(0),
                 tmp_in_flight: std::sync::Mutex::new(HashSet::new()),
             }),
         };
@@ -200,9 +204,17 @@ impl Engine {
         self.shared.queue_cap.store(cap.max(1), Ordering::Relaxed);
     }
 
-    /// Makes the next floor scans (a folder switch, a start after an index
-    /// loss) pause this long before hashing, so a test can reconnect a
-    /// peer in the middle of one. For tests.
+    /// Makes this device answer the next `count` block requests with
+    /// "unavailable", so a test can make a peer's download fail and retry.
+    /// For tests.
+    #[doc(hidden)]
+    pub fn fail_next_blocks_for_tests(&self, count: u32) {
+        self.shared.fail_blocks.store(count, Ordering::SeqCst);
+    }
+
+    /// Makes the first scan of a folder switch or a resume pause this long
+    /// before hashing, so a test can reconnect a peer, or pause the engine,
+    /// in the middle of one. For tests.
     #[doc(hidden)]
     pub fn set_scan_hash_delay_for_tests(&self, delay: std::time::Duration) {
         self.shared
@@ -291,11 +303,14 @@ impl Engine {
         Ok(())
     }
 
-    /// Paused: no watching, scanning, dialling or syncing. Pairing still
-    /// works so a phone can pair before it has storage access. Resuming
-    /// creates the folder, starts the watcher and runs the first scan; if
-    /// any of that fails the engine stays paused and says why in `errors`,
-    /// so the person can fix the folder and try again.
+    /// Paused: no watching, scanning or syncing. Paired links stay open:
+    /// nothing is sent or adopted on them and block requests are answered
+    /// as unavailable, and pairing still works so a phone can pair before
+    /// it has storage access. Resuming creates the folder, starts the
+    /// watcher, runs the first scan, then sends the full index to every
+    /// link and applies what the peers announced meanwhile, exactly as on
+    /// a new connection. If the resume fails the engine stays paused and
+    /// says why in `errors`, so the person can fix the folder and try again.
     pub async fn set_paused(&self, paused: bool) {
         let was = std::mem::replace(
             &mut self.shared.settings.write().expect("settings lock").paused,
@@ -305,9 +320,7 @@ impl Engine {
             return;
         }
         if paused {
-            let mut inner = self.lock().await;
-            inner.watcher = None;
-            inner.conns.clear();
+            self.lock().await.watcher = None;
         } else {
             let folder = self.folder();
             let resumed = async {
@@ -317,14 +330,49 @@ impl Engine {
                 self.start_folder(None).await
             }
             .await;
-            if let Err(e) = resumed {
-                self.shared.settings.write().expect("settings lock").paused = true;
-                let mut inner = self.lock().await;
-                inner.watcher = None;
-                inner.push_error(format!("cannot resume syncing: {e:#}"));
+            match resumed {
+                Err(e) => {
+                    self.shared.settings.write().expect("settings lock").paused = true;
+                    let mut inner = self.lock().await;
+                    inner.watcher = None;
+                    inner.push_error(format!("cannot resume syncing: {e:#}"));
+                }
+                Ok(()) if self.settings().paused => {
+                    // A pause overtook the resume: it wins, and whatever the
+                    // resume set up on its way is taken down again.
+                    self.lock().await.watcher = None;
+                }
+                Ok(()) => self.resume_links().await,
             }
         }
         self.publish_state().await;
+    }
+
+    /// After a resume: the full index to every link, then whatever the
+    /// peers announced while paused, as if each had just connected.
+    async fn resume_links(&self) {
+        let replay: Vec<(String, u64, Vec<crate::index::Entry>)> = {
+            let mut inner = self.lock().await;
+            let conns: Vec<_> = inner.conns.values().map(|l| l.conn.clone()).collect();
+            for conn in &conns {
+                self.send_full_index(&inner, conn);
+            }
+            inner
+                .conns
+                .values_mut()
+                .filter(|l| !l.held.is_empty())
+                .map(|l| {
+                    (
+                        l.conn.peer_id.clone(),
+                        l.link_id,
+                        l.held.drain().map(|(_, e)| e).collect(),
+                    )
+                })
+                .collect()
+        };
+        for (peer_id, link_id, entries) in replay {
+            self.on_remote_entries(&peer_id, link_id, entries).await;
+        }
     }
 
     pub async fn rescan(&self) -> Result<()> {
