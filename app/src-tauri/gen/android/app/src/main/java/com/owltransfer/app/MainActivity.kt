@@ -9,7 +9,10 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.OpenableColumns
 import android.util.Log
+import android.view.View
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -57,6 +60,7 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    fitInsideTheSystemBars()
     acquireMulticastLock()
 
     // Only on a genuinely new launch. Android keeps the launching intent when a
@@ -81,6 +85,33 @@ class MainActivity : TauriActivity() {
     multicastLock?.let { if (it.isHeld) it.release() }
     multicastLock = null
     super.onDestroy()
+  }
+
+  /**
+   * Keeps the web layer clear of the status bar and the gesture handle.
+   *
+   * Android's WebView works out env(safe-area-inset-*) from the display cutout
+   * alone and not from the system bars, so on a phone without a notch every one
+   * of them is zero and the tab bar ends up underneath the gesture handle. The
+   * interface asks for that padding and cannot be given it from its own side.
+   *
+   * Dropping enableEdgeToEdge() would not help: targetSdk is 35, and Android 15
+   * lays an activity out edge to edge whether it asked to or not. So the insets
+   * are applied here instead, and the strips they leave show windowBackground,
+   * which is the same colour the interface paints.
+   *
+   * The insets are passed on rather than consumed, so that the WebView still
+   * sees the keyboard arrive.
+   */
+  private fun fitInsideTheSystemBars() {
+    val content = findViewById<View>(android.R.id.content)
+    ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      )
+      view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      insets
+    }
   }
 
   private fun acquireMulticastLock() {

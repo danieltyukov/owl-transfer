@@ -1,6 +1,8 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.owl_transfer" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your theme here. -->
+        <!-- What shows behind the status bar and the gesture handle, which the
+             web layer is padded in from. See values/colors.xml. -->
+        <item name="android:windowBackground">@color/owl_ground</item>
     </style>
 </resources>
