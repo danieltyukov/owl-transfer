@@ -219,16 +219,18 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
-      - name: Install the NDK and point the build at it
+      # The runner image ships the Android SDK with cmdline-tools at
+      # $ANDROID_HOME, so no setup action is needed; the one this workflow
+      # first used failed inside itself before any step of ours ran. What the
+      # build needs beyond the image is installed here by sdkmanager.
+      - name: Install the platform, build tools and NDK, and point the build at them
         run: |
           set -euo pipefail
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           # `yes` is killed by SIGPIPE once sdkmanager stops reading, which
           # pipefail would otherwise report as a failed step.
           yes | "$sdkmanager" --licenses > /dev/null || true
-          "$sdkmanager" "ndk;$NDK_VERSION"
+          "$sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;$NDK_VERSION"
           echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
       # All four Android ABIs, although only two are built below. Installing
