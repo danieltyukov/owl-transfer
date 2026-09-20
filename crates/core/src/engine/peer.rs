@@ -137,12 +137,16 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
             loop {
                 match rx.recv().await {
                     Some(Frame::Control(Control::PairAccept)) => return Ok(()),
-                    Some(Frame::Control(Control::PairReject { reason })) => return Err(reason),
+                    Some(Frame::Control(Control::PairReject { reason })) => {
+                        return Err(Some(reason))
+                    }
                     Some(Frame::Control(Control::Ping)) => {
                         let _ = conn.send(Frame::Control(Control::Pong)).await;
                     }
                     Some(_) => {}
-                    None => return Err("the connection closed".to_string()),
+                    // Closed without a word: either the person cancelled
+                    // here or the other side went away. Not an error to show.
+                    None => return Err(None),
                 }
             }
         })
@@ -154,10 +158,14 @@ pub(crate) async fn pair_outgoing(engine: Engine, addr: SocketAddr) -> Result<()
                 info!("paired with {} ({})", conn.peer_name, conn.peer_id);
                 run_peer(engine, conn, rx).await;
             }
-            Ok(Err(reason)) => {
+            Ok(Err(Some(reason))) => {
                 engine
                     .error(format!("pairing with {} failed: {reason}", conn.peer_name))
                     .await;
+                conn.close();
+            }
+            Ok(Err(None)) => {
+                debug!("pairing with {} ended without an answer", conn.peer_name);
                 conn.close();
             }
             Err(_) => {
