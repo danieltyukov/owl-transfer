@@ -1,0 +1,24 @@
+[workspace]
+members = ["crates/core", "app/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/danieltyukov/owl-transfer"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+# Tests transfer tens of megabytes; an unoptimised blake3 makes them slow for
+# no reason.
+[profile.dev.package.blake3]
+opt-level = 3
+[profile.dev.package.ring]
+opt-level = 3

@@ -1,45 +1,35 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.build/
-.buildlog/
-.history
-.svn/
-.swiftpm/
-migrate_working_dir/
+# Dependencies and build output
+node_modules/
+dist/
+target/
+.vite/
+tsconfig.tsbuildinfo
+*.tsbuildinfo
 
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
+# Tauri Android: the generated project is committed, its build output is not
+app/src-tauri/gen/android/.gradle/
+app/src-tauri/gen/android/build/
+app/src-tauri/gen/android/app/build/
+app/src-tauri/gen/android/app/.cxx/
+app/src-tauri/gen/android/local.properties
+app/src-tauri/gen/android/.idea/
+app/src-tauri/gen/android/*.iml
+app/src-tauri/gen/android/app/*.iml
+app/src-tauri/gen/android/captures/
+
+# Signing material never enters the repository
+*.jks
+*.keystore
+keystore.properties
+
+# Test output
+app/playwright-report/
+app/test-results/
+node_modules/.cache/
+
+# Editors and OS
 .idea/
-
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
-.dart_tool/
-.flutter-plugins-dependencies
-.pub-cache/
-.pub/
-/build/
-/coverage/
-
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
+.vscode/
+.DS_Store
+*.log
+*.swp

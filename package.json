@@ -1,0 +1,18 @@
+{
+  "name": "owl-transfer",
+  "private": true,
+  "type": "module",
+  "workspaces": ["app", "site"],
+  "scripts": {
+    "dev": "npm run dev -w app",
+    "build": "npm run build -w app",
+    "test": "vitest run",
+    "test:e2e": "npm run e2e -w app",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.0"
+  }
+}
