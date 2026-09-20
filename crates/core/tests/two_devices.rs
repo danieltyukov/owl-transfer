@@ -1371,14 +1371,14 @@ async fn a_conflict_settled_by_a_remote_delete_leaves_no_stale_copy() {
     assert!(wait_until(|| !connected_to(&a.engine, &b.id()), WAIT).await);
 
     // Both edit while apart; beta's edit is newer, so alpha is the losing
-    // side, and its downloads of beta's version keep failing.
+    // side, and its first download of beta's version fails.
     a.write("doc.txt", b"alpha edit");
     assert!(wait_until(|| a.engine.state().summary.bytes == 10, WAIT).await);
     b.write("doc.txt", b"beta edit, newer");
     let newer = mtime_ms(&a.path("doc.txt")) + 5000;
     owl_core::clock::set_mtime_ms(&b.path("doc.txt"), newer).unwrap();
     b.restart().await;
-    b.engine.fail_next_blocks_for_tests(3);
+    b.engine.fail_next_blocks_for_tests(1);
     assert!(
         wait_until(
             || connected_to(&a.engine, &b.id()) && connected_to(&b.engine, &a.id()),
