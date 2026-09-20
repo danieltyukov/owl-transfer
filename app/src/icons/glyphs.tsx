@@ -194,6 +194,34 @@ export function FolderPlusGlyph(props: GlyphProps) {
   );
 }
 
+/**
+ * Open folder: the folder, with an arrow leaving it.
+ *
+ * The same arrow head as `ExternalGlyph`, because it means the same thing in
+ * both places: this hands the folder to something outside the app.
+ */
+export function FolderOutGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M2 4.5 A1.5 1.5 0 0 1 3.5 3 H6.2 L7.7 5 H12.5 A1.5 1.5 0 0 1 14 6.5 V11.5 A1.5 1.5 0 0 1 12.5 13 H3.5 A1.5 1.5 0 0 1 2 11.5 Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6.6 10.4 L10.6 6.4 M8.2 6.4 H10.6 V8.8"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Glyph>
+  );
+}
+
 export function ChevronGlyph(props: GlyphProps) {
   return (
     <Glyph {...props}>

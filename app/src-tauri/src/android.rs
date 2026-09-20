@@ -82,6 +82,17 @@ impl<R: Runtime> Owl<R> {
         Ok(())
     }
 
+    /// Opens a folder in whatever the phone uses as a file manager.
+    ///
+    /// The sync folder is in shared storage, so the system documents provider
+    /// has a name for it and every Files application can open that. Kotlin
+    /// builds the document URI, falls back to a `FileProvider` one, and shows
+    /// the path in a toast when the phone has nothing that opens a folder.
+    pub fn open_folder(&self, path: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.0.run_mobile_plugin("openFolder", PathArgs { path })?;
+        Ok(())
+    }
+
     /// Sets the window background to the colour the page is drawn on.
     ///
     /// The web layer is padded in by the system bar insets, so what is left

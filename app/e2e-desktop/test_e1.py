@@ -514,6 +514,34 @@ def test_11_new_folder(pair, measure):
     a.wait_for_row("Made here")
 
 
+def test_11_show_in_folder(pair):
+    """The row menu hands a file to the system's file manager.
+
+    Whether a window opened, and what it shows, belongs to the file manager and
+    is not something this suite can see. What it can see is whether the command
+    was accepted: every other call from this menu puts a toast on the screen
+    when it comes back an error, and this one does too. So the assertion is
+    that none arrives.
+
+    This does really open a file manager window on the machine running the
+    suite, which is the point of an end to end test and worth knowing before
+    running it on a desktop you are using.
+    """
+    a, _ = pair
+    a.go_root()
+    (a.folder / "show me.txt").write_bytes(b"where do i live")
+    a.wait_for_row("show me.txt")
+
+    a.open_row_menu("show me.txt")
+    a.menu_item("Show in folder")
+    wait_until(lambda: a.find('[role="menu"]') is None, UI, "the menu stayed open")
+
+    # A settle rather than a wait, because what is being asserted is that
+    # nothing appears. A command that is refused comes back in well under this.
+    time.sleep(1.0)
+    assert a.find(".toast") is None, a.texts(".toast-text")
+
+
 def test_11_a_name_a_file_cannot_have_is_refused(pair):
     """The dialog says why rather than letting the engine fail."""
     a, _ = pair

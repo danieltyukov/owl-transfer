@@ -154,7 +154,24 @@ export interface Backend {
   deleteEntry(path: string): Promise<void>;
   renameEntry(path: string, newName: string): Promise<void>;
   openEntry(path: string): Promise<void>;
-  revealFolder(): Promise<void>;
+  /**
+   * Shows one entry where it lives, in the system's file manager.
+   *
+   * On a desktop that means the parent folder opens with the item selected. An
+   * Android file manager has no "select this one" to ask for, so there the
+   * parent folder opens and the person finds it by name.
+   */
+  revealEntry(path: string): Promise<void>;
+  /**
+   * Opens a directory itself in the system's file manager: the sync folder
+   * when nothing is named, otherwise one relative to it.
+   *
+   * This is the way out of the app. The folder is an ordinary directory and
+   * the tools a person already has are better at most of what happens to it,
+   * so the interface says where it is rather than growing a second file
+   * manager of its own.
+   */
+  revealFolder(path?: string): Promise<void>;
   pickFolder(): Promise<string | null>;
   setFolder(path: string): Promise<void>;
   setDeviceName(name: string): Promise<void>;

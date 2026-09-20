@@ -205,7 +205,10 @@ export async function createTauriBackend(): Promise<Backend> {
     deleteEntry: path => invoke<void>('delete_entry', { path }),
     renameEntry: (path, newName) => invoke<void>('rename_entry', { path, newName }),
     openEntry: path => invoke<void>('open_entry', { path }),
-    revealFolder: () => invoke<void>('reveal_folder'),
+    revealEntry: path => invoke<void>('reveal_entry', { path }),
+    // The empty string is the sync folder itself, which is what the engine's
+    // own path validation calls the root.
+    revealFolder: (path = '') => invoke<void>('reveal_folder', { path }),
 
     async pickFolder() {
       // Android's picker hands back a tree URI rather than a path, and the

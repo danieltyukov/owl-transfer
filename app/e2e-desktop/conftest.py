@@ -20,9 +20,27 @@ from owl import BINARY, Instance, drivers_on, processes_for
 
 # Ports. Each instance needs four of its own: the engine's TCP port, its UDP
 # beacon, the tauri-driver in front of it and the WebKitWebDriver behind that.
+# The two engines' ports. A installed copy of the app, or anything else already
+# listening on 52734, stops the suite before the first test, so the pair can be
+# moved with OWL_E2E_PORT_BASE. The default is the app's own port, which is what
+# the numbers in the README say.
+PORT_BASE = int(os.environ.get("OWL_E2E_PORT_BASE", "52734"))
+
 PORTS = {
-    "a": {"tcp_port": 52734, "beacon_port": 52735, "driver_port": 4444, "native_port": 4464},
-    "b": {"tcp_port": 52744, "beacon_port": 52745, "driver_port": 4446, "native_port": 4466},
+    "a": {
+        "tcp_port": PORT_BASE,
+        "beacon_port": PORT_BASE + 1,
+        "driver_port": 4444,
+        "native_port": 4464,
+    },
+    "b": {
+        # Ten apart, so that the two beacons cannot hear each other and B has
+        # to pair by typing A's address, which is the step the suite starts on.
+        "tcp_port": PORT_BASE + 10,
+        "beacon_port": PORT_BASE + 11,
+        "driver_port": 4446,
+        "native_port": 4466,
+    },
 }
 
 WORK = Path(os.environ.get("OWL_E2E_WORK", "/tmp/owl-e2e-desktop"))

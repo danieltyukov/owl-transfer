@@ -154,6 +154,7 @@ pub fn run() {
             commands::delete_entry,
             commands::rename_entry,
             commands::open_entry,
+            commands::reveal_entry,
             commands::reveal_folder,
             commands::set_folder,
             commands::set_device_name,

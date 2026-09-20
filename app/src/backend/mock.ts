@@ -99,6 +99,21 @@ export interface MockBackend extends Backend {
   emitDragOver(over: boolean): void;
   readonly state: State;
   readonly entries: ReadonlyMap<string, DirEntry>;
+  /**
+   * Every file manager the interface asked for, oldest first.
+   *
+   * There is no file manager behind the mock and nothing on screen changes, so
+   * a test has nothing else to assert against. What matters is which path was
+   * named, which is the part a component gets wrong.
+   */
+  readonly revealed: readonly Reveal[];
+}
+
+/** One ask of the file manager: an entry to show, or a directory to open. */
+export interface Reveal {
+  kind: 'entry' | 'folder';
+  /** Relative to the sync folder. The empty string is the folder itself. */
+  path: string;
 }
 
 const parentOf = (path: string): string => {
@@ -212,6 +227,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   let permission: Permission = seed.permission ?? 'not-applicable';
   let picked = 0;
 
+  const revealed: Reveal[] = [];
+
   const stateListeners = new Set<(s: State) => void>();
   const dirListeners = new Set<(path: string) => void>();
   const dropListeners = new Set<(paths: string[]) => void>();
@@ -285,6 +302,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     get entries() {
       return tree;
+    },
+    get revealed() {
+      return revealed;
     },
 
     emitState(patch) {
@@ -390,7 +410,17 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
 
     openEntry: () => Promise.resolve(),
-    revealFolder: () => Promise.resolve(),
+
+    revealEntry(path) {
+      revealed.push({ kind: 'entry', path });
+      return Promise.resolve();
+    },
+
+    revealFolder(path = '') {
+      revealed.push({ kind: 'folder', path });
+      return Promise.resolve();
+    },
+
     pickFolder: () => Promise.resolve('/home/you/Shared'),
 
     setFolder(path) {

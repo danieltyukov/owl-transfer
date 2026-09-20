@@ -33,7 +33,7 @@ that have to pass before a reconnection can be called late.
 | `tauri-driver` | `cargo install tauri-driver --locked`. Override with `TAURI_DRIVER`. |
 | `WebKitWebDriver` | On Debian and Ubuntu, `apt install webkit2gtk-driver`. |
 | A desktop session | Two windows really open. A headless machine needs `xvfb-run ./run.sh`. |
-| Free ports | 52734, 52735, 52744, 52745 for the two engines, and 4444, 4446, 4464, 4466 for the drivers. |
+| Free ports | 52734, 52735, 52744, 52745 for the two engines, and 4444, 4446, 4464, 4466 for the drivers. `OWL_E2E_PORT_BASE` moves the four engine ports, which an installed copy of the app already listening on 52734 is reason enough to do. |
 
 `OWL_E2E_WORK` moves the two instances' directories, which default to
 `/tmp/owl-e2e-desktop`. `OWL_E2E_REPORT` names a file to write the table of

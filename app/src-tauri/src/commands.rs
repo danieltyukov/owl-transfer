@@ -197,25 +197,88 @@ async fn open_absolute(app: AppHandle, path: PathBuf) -> Answer<()> {
     .await
 }
 
-/// Shows the sync folder in the system's file manager.
+/// Shows one entry where it lives, in the system's file manager.
+///
+/// The path is relative and goes through the engine, which is what rejects
+/// `..`, an absolute path and an empty component before any of it reaches a
+/// system that would happily open whatever it was handed.
 #[tauri::command]
-pub async fn reveal_folder(handle: State<'_, EngineHandle>) -> Answer<()> {
-    reveal(handle.engine().await?.folder()).await
+pub async fn reveal_entry(
+    path: String,
+    app: AppHandle,
+    handle: State<'_, EngineHandle>,
+) -> Answer<()> {
+    let absolute = handle
+        .engine()
+        .await?
+        .absolute_path(&path)
+        .map_err(failed)?;
+    reveal_item(app, absolute).await
+}
+
+/// Opens a directory itself: the sync folder, or one under it.
+#[tauri::command]
+pub async fn reveal_folder(
+    path: Option<String>,
+    app: AppHandle,
+    handle: State<'_, EngineHandle>,
+) -> Answer<()> {
+    let absolute = handle
+        .engine()
+        .await?
+        .absolute_path(path.as_deref().unwrap_or_default())
+        .map_err(failed)?;
+    reveal_dir(app, absolute).await
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn reveal(folder: PathBuf) -> Answer<()> {
+async fn reveal_item(_app: AppHandle, path: PathBuf) -> Answer<()> {
     blocking(move || {
-        tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|error| error.to_string())
+        tauri_plugin_opener::reveal_item_in_dir(path).map_err(|error| error.to_string())
     })
     .await
 }
 
-/// Android has no file manager to hand a path to, and the folder is in shared
-/// storage where every one of them can already see it, so there this does
-/// nothing rather than failing. The interface does not draw the button either.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn reveal_dir(app: AppHandle, dir: PathBuf) -> Answer<()> {
+    use tauri_plugin_opener::OpenerExt;
+
+    // `open_path` and not `reveal_item_in_dir`: revealing a directory opens its
+    // parent with it selected, and what was asked for is the directory.
+    blocking(move || {
+        app.opener()
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .map_err(|error| error.to_string())
+    })
+    .await
+}
+
+/// Android's document picker has no selection to ask for, so the closest it
+/// gets is opening the folder the entry is in.
 #[cfg(any(target_os = "android", target_os = "ios"))]
-async fn reveal(_folder: PathBuf) -> Answer<()> {
+async fn reveal_item(app: AppHandle, path: PathBuf) -> Answer<()> {
+    let folder = path
+        .parent()
+        .map_or(path.clone(), |parent| parent.to_path_buf());
+    reveal_dir(app, folder).await
+}
+
+/// The sync folder is in shared storage, which every file manager on the phone
+/// can already see. `OwlPlugin` asks the documents provider for it by name.
+#[cfg(target_os = "android")]
+async fn reveal_dir(app: AppHandle, dir: PathBuf) -> Answer<()> {
+    use crate::android::OwlExt;
+
+    blocking(move || {
+        app.owl()
+            .open_folder(&dir.to_string_lossy())
+            .map_err(failed)
+    })
+    .await
+}
+
+#[cfg(target_os = "ios")]
+async fn reveal_dir(_app: AppHandle, _dir: PathBuf) -> Answer<()> {
     Ok(())
 }
 

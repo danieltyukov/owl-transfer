@@ -7,7 +7,7 @@ import type {
   State,
   Transfer,
 } from '../../backend/types.js';
-import { FolderPlusGlyph, PlusGlyph } from '../../icons/glyphs.js';
+import { FolderOutGlyph, FolderPlusGlyph, PlusGlyph } from '../../icons/glyphs.js';
 import { OwlMark } from '../../icons/OwlMark.js';
 import type { Pane } from '../../panes.js';
 import { Dialog } from '../Dialog.js';
@@ -188,6 +188,23 @@ export function Files({ backend, state, dir, onDir, onPane, onError, storage }: 
     void backend.pickAndImport(dir).catch(() => onError('Those files could not be added.'));
   };
 
+  /*
+   * The two ways out to the system's own file manager.
+   *
+   * Neither is refused while the engine is paused. They read nothing and write
+   * nothing: they hand a path to something else, which is exactly what someone
+   * whose folder the app cannot reach may want to do about it.
+   */
+  const openFolder = (): void => {
+    void backend.revealFolder(dir).catch(() => onError('The folder would not open.'));
+  };
+
+  const showInFolder = (entry: DirEntry): void => {
+    void backend
+      .revealEntry(entry.path)
+      .catch(() => onError(`${entry.name} could not be shown.`));
+  };
+
   const startDialogue = (next: Dialogue): void => {
     setMenu(null);
     setDraft(next.kind === 'rename' ? next.entry.name : '');
@@ -239,6 +256,15 @@ export function Files({ backend, state, dir, onDir, onPane, onError, storage }: 
           <button type="button" className="button" aria-label="Add files" onClick={addFiles}>
             <PlusGlyph />
             <span className="button-label">Add files</span>
+          </button>
+          <button
+            type="button"
+            className="button"
+            aria-label="Open folder"
+            onClick={openFolder}
+          >
+            <FolderOutGlyph />
+            <span className="button-label">Open folder</span>
           </button>
           <button
             type="button"
@@ -301,6 +327,11 @@ export function Files({ backend, state, dir, onDir, onPane, onError, storage }: 
             const entry = menu.entry;
             setMenu(null);
             open(entry);
+          }}
+          onReveal={() => {
+            const entry = menu.entry;
+            setMenu(null);
+            showInFolder(entry);
           }}
           onRename={() => startDialogue({ kind: 'rename', entry: menu.entry })}
           onDelete={() => startDialogue({ kind: 'delete', entry: menu.entry })}

@@ -205,6 +205,65 @@ describe('the files pane', () => {
     expect(screen.queryByRole('button', { name: /^readme\.txt/ })).toBeNull();
   });
 
+  it('shows an entry in its folder from the row menu', async () => {
+    const user = userEvent.setup();
+    const mock = createMockBackend();
+    render(<App backend={mock} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    const menu = await openMenuFor(user, 'readme.txt');
+    await user.click(within(menu).getByRole('menuitem', { name: 'Show in folder' }));
+
+    expect(mock.revealed).toEqual([{ kind: 'entry', path: 'readme.txt' }]);
+    // The menu is a layer over the window, and a file manager opening behind
+    // one nobody dismissed is a window that cannot be used.
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('names the nested path, not the name, when showing a file in a subfolder', async () => {
+    const user = userEvent.setup();
+    const mock = createMockBackend();
+    render(<App backend={mock} />);
+
+    await user.click(await screen.findByRole('button', { name: /^Photos/ }));
+    const menu = await openMenuFor(user, 'lighthouse.jpg');
+    await user.click(within(menu).getByRole('menuitem', { name: 'Show in folder' }));
+
+    expect(mock.revealed).toEqual([{ kind: 'entry', path: 'Photos/lighthouse.jpg' }]);
+  });
+
+  it('opens the directory the list is showing, root or not', async () => {
+    const user = userEvent.setup();
+    const mock = createMockBackend();
+    render(<App backend={mock} />);
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    await user.click(screen.getByRole('button', { name: 'Open folder' }));
+    expect(mock.revealed).toEqual([{ kind: 'folder', path: '' }]);
+
+    // The same button one directory down asks for that one, which is the whole
+    // reason it takes a path rather than always meaning the sync folder.
+    await user.click(screen.getByRole('button', { name: /^Photos/ }));
+    await user.click(screen.getByRole('button', { name: 'Open folder' }));
+    expect(mock.revealed).toEqual([
+      { kind: 'folder', path: '' },
+      { kind: 'folder', path: 'Photos' },
+    ]);
+  });
+
+  it('opens the folder even while the engine is paused, since it reads nothing', async () => {
+    // A phone with no storage grant is exactly when someone wants to look at
+    // the folder with something else.
+    const user = userEvent.setup();
+    const mock = createMockBackend({ platform: 'android', permission: 'denied' });
+    mock.emitState({ paused: true });
+    render(<App backend={mock} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open folder' }));
+    expect(mock.revealed).toEqual([{ kind: 'folder', path: '' }]);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('asks before deleting, and says what a folder takes with it', async () => {
     const user = userEvent.setup();
     render(<App backend={createMockBackend()} />);
@@ -321,7 +380,8 @@ describe('the row menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Open' })).toHaveFocus();
 
     await user.keyboard('{ArrowDown}');
-    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Show in folder' })).toHaveFocus();
+    // Up past the first item wraps to the last.
     await user.keyboard('{ArrowUp}{ArrowUp}');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
 
@@ -339,7 +399,8 @@ describe('the row menu', () => {
     expect(screen.getByRole('menuitem', { name: 'Open' })).toHaveFocus();
 
     await user.tab();
-    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    expect(screen.getByRole('menuitem', { name: 'Show in folder' })).toHaveFocus();
+    await user.tab();
     await user.tab();
     await user.tab();
     // Round, not out into a page that is still under a layer swallowing every

@@ -6,9 +6,11 @@ import android.content.Intent
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.Log
 import android.webkit.MimeTypeMap
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
@@ -52,9 +54,9 @@ class ThemeArgs {
  * content:// URI, which carries no name; the name is a column in the content
  * resolver, which is Kotlin's to read.
  *
- * The fourth is opening a file, which needs a content URI of our own making,
- * and the fifth is the window background, which is the only part of the screen
- * the web layer does not paint.
+ * The fourth is opening a file and the fifth is opening a folder, both of which
+ * need a URI of our own making, and the sixth is the window background, which
+ * is the only part of the screen the web layer does not paint.
  *
  * The Rust half is app/src-tauri/src/android.rs.
  */
@@ -133,6 +135,35 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   /**
+   * Opens a folder in whatever the phone uses as a file manager.
+   *
+   * Three ways down, because no one of them works on every phone. The system
+   * documents provider has a name for everything in shared storage, and the
+   * stock Files application opens a document URI built from that name, which
+   * is the one that lands the person inside the folder. Failing that, the
+   * folder goes out as a FileProvider URI, which some third party managers
+   * take. Failing that too, the path itself is worth more than silence, so it
+   * goes in a toast for the person to type into whatever they do have.
+   *
+   * Resolving in the last case is deliberate: the app has said where the
+   * folder is, which is all it promised, and an error toast on top of the one
+   * carrying the answer would only be in the way.
+   */
+  @Command
+  fun openFolder(invoke: Invoke) {
+    val args = invoke.parseArgs(PathArgs::class.java)
+    val folder = File(args.path)
+
+    if (!openAsDocument(folder) && !openAsProvidedFile(folder)) {
+      Log.i(TAG, "nothing on this phone opens a folder, showing the path instead")
+      activity.runOnUiThread {
+        Toast.makeText(activity, folder.absolutePath, Toast.LENGTH_LONG).show()
+      }
+    }
+    invoke.resolve(JSObject())
+  }
+
+  /**
    * Paints the window background the colour the page is drawn on.
    *
    * The web layer is padded in by the system bar insets, so the strips behind
@@ -190,6 +221,61 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   /**
+   * The folder as the system documents provider names it.
+   *
+   * Everything in primary shared storage has a document id of the form
+   * "primary:<path under /storage/emulated/0>", and the stock Files
+   * application opens a view of one. A folder somewhere else, which a sync
+   * folder moved onto an SD card would be, has no such name here and falls
+   * through to the next way down.
+   */
+  private fun openAsDocument(folder: File): Boolean {
+    val relative = underPrimaryStorage(folder) ?: return false
+    val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE, "primary:$relative")
+    return start(viewOf(uri, DIRECTORY_TYPE))
+  }
+
+  /** The folder through this app's own provider, for a manager that takes one. */
+  private fun openAsProvidedFile(folder: File): Boolean {
+    val uri = try {
+      FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", folder)
+    } catch (e: IllegalArgumentException) {
+      Log.w(TAG, "cannot share $folder through the file provider", e)
+      return false
+    }
+    return start(viewOf(uri, DIRECTORY_TYPE))
+  }
+
+  /**
+   * The path under /storage/emulated/0, with forward slashes, or null when the
+   * folder is not under it at all. The storage root itself is the empty
+   * string, which names the whole of primary storage.
+   */
+  private fun underPrimaryStorage(folder: File): String? {
+    val root = Environment.getExternalStorageDirectory().absolutePath
+    val path = folder.absolutePath
+    if (path == root) return ""
+    if (!path.startsWith("$root/")) return null
+    return path.substring(root.length + 1)
+  }
+
+  private fun viewOf(uri: Uri, type: String): Intent =
+    Intent(Intent.ACTION_VIEW).apply {
+      setDataAndType(uri, type)
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+  /** Starts an intent, answering whether anything took it. */
+  private fun start(intent: Intent): Boolean =
+    try {
+      activity.startActivity(intent)
+      true
+    } catch (e: ActivityNotFoundException) {
+      Log.i(TAG, "nothing handled ${intent.data}", e)
+      false
+    }
+
+  /**
    * What kind of file this is, as far as the extension says.
    *
    * MimeTypeMap wants a lowercase extension and nothing else; a name with a
@@ -206,5 +292,11 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
   private companion object {
     const val TAG = "owl-transfer"
     const val ANY_TYPE = "*/*"
+
+    /** The provider that names everything in shared storage. */
+    const val EXTERNAL_STORAGE = "com.android.externalstorage.documents"
+
+    /** What a file manager looks for when it is asked to show a folder. */
+    const val DIRECTORY_TYPE = "vnd.android.document/directory"
   }
 }
