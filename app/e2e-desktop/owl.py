@@ -324,8 +324,11 @@ class Instance:
     def peers(self) -> list[dict]:
         return self.state()["peers"]
 
+    def connected_to_id(self, device_id: str) -> bool:
+        return any(p["id"] == device_id and p["connected"] for p in self.peers())
+
     def connected_to(self, other: "Instance") -> bool:
-        return any(p["id"] == other.device_id and p["connected"] for p in self.peers())
+        return self.connected_to_id(other.device_id or "")
 
     def transfers_running(self) -> int:
         return len(self.state()["transfers"]["active"])

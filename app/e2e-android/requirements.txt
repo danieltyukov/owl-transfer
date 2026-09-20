@@ -1,0 +1,3 @@
+# The Android end to end run. Python 3.11 or newer, plus the desktop suite's
+# requirements.txt: the desktop half of this run is that suite's Instance.
+websocket-client>=1.7
