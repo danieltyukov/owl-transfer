@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Owl Transfer</title>
+    <meta
+      name="description"
+      content="A folder that is the same on your computer and your phone. Drop a file in on one and it is on the other within a second, over your own Wi-Fi, with no account and no server. Linux, Windows and Android."
+    />
+    <link rel="icon" href="../app/public/favicon.svg" type="image/svg+xml" />
+    <link rel="canonical" href="https://danieltyukov.github.io/owl-transfer/" />
+    <script>
+      // Blocking, and in the head, because the alternative is a light page
+      // repainting to dark after the stylesheet has already been applied. It
+      // reads one key and sets one attribute; the CSS does the rest.
+      try {
+        var t = localStorage.getItem('owl-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch (e) {
+        // Private mode, or storage disabled. The page is correct without it.
+      }
+    </script>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="head">
+      <div class="wrap head-inner">
+        <div class="brand">
+          <!--
+            The same drawing as the app's OwlMark and the launcher icons: a V
+            brow, two ringed eyes that also read as two lenses, and a beak. It
+            is decoration beside the wordmark, so it is hidden from assistive
+            technology rather than given a label that repeats the words under it.
+          -->
+          <svg class="mark" viewBox="0 0 32 32" width="30" height="30" aria-hidden="true" focusable="false">
+            <path
+              d="M5,11 L16,6.5 L27,11"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            <circle cx="10.5" cy="17" r="5" fill="none" stroke="currentColor" stroke-width="2.2" />
+            <circle cx="21.5" cy="17" r="5" fill="none" stroke="currentColor" stroke-width="2.2" />
+            <circle cx="10.5" cy="17" r="2.1" fill="currentColor" />
+            <circle cx="21.5" cy="17" r="2.1" fill="currentColor" />
+            <path d="M14.4,23.2 L17.6,23.2 L16,26.4 Z" fill="currentColor" />
+          </svg>
+          <h1 class="wordmark">Owl Transfer</h1>
+        </div>
+
+        <button type="button" id="theme" class="toggle" aria-pressed="false">
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.4" />
+            <path d="M8 2 A6 6 0 0 0 8 14 Z" fill="currentColor" />
+          </svg>
+          <span>Dark mode</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="main">
+      <div class="wrap">
+        <p class="lede">
+          A folder that is the same on your computer and your phone. Drop a file in on one and it
+          is on the other within a second, over your own Wi-Fi, with no account and no server.
+        </p>
+
+        <p class="actions">
+          <a
+            class="btn btn-primary"
+            href="https://github.com/danieltyukov/owl-transfer/releases/latest/download/owl-transfer.apk"
+          >
+            Download for Android
+          </a>
+          <a
+            class="btn"
+            href="https://github.com/danieltyukov/owl-transfer/releases/latest/download/owl-transfer_x86_64.AppImage"
+          >
+            Download for Linux
+          </a>
+          <a
+            class="btn"
+            href="https://github.com/danieltyukov/owl-transfer/releases/latest/download/OwlTransfer_x64-setup.exe"
+          >
+            Download for Windows
+          </a>
+        </p>
+        <p class="note">
+          The AppImage runs anywhere: <code>chmod +x</code> and go. A <code>.deb</code> for Debian
+          and Ubuntu and an <code>.msi</code> for anyone who deploys with one are on the
+          <a href="https://github.com/danieltyukov/owl-transfer/releases/latest">releases page</a>.
+          The Linux builds are made on Ubuntu 22.04 so they run on older systems too. The Windows
+          installer is not code-signed, so SmartScreen asks once.
+        </p>
+      </div>
+
+      <!--
+        Two sizes, two themes, one image shown. The desktop shot is 2880px wide
+        and is a picture of a shape rather than something anyone can read once
+        the column is narrower than about 760px, so below that the phone shot
+        takes over. Each of the four carries its own alt, because what the
+        reader is missing genuinely differs between the two layouts.
+      -->
+      <figure class="shot">
+        <div class="shot-wide">
+          <img
+            class="shot-light"
+            src="../docs/img/desktop-light.webp"
+            width="2880"
+            height="1720"
+            alt="The Owl Transfer desktop app: a sidebar with the sync folder and two paired devices each showing a status dot, a file list in the middle with a sync badge beside every name and one file part way through, and a status strip along the bottom."
+          />
+          <img
+            class="shot-dark"
+            src="../docs/img/desktop-dark.webp"
+            width="2880"
+            height="1720"
+            alt="The Owl Transfer desktop app: a sidebar with the sync folder and two paired devices each showing a status dot, a file list in the middle with a sync badge beside every name and one file part way through, and a status strip along the bottom."
+          />
+        </div>
+        <div class="shot-narrow">
+          <img
+            class="shot-light"
+            src="../docs/img/phone.webp"
+            width="780"
+            height="1733"
+            alt="The same folder on a phone: a header with the owl mark and a status pill, the file list with a sync badge beside every name, and tabs for Files, Devices and Settings along the bottom."
+          />
+          <img
+            class="shot-dark"
+            src="../docs/img/phone-dark.webp"
+            width="780"
+            height="1733"
+            alt="The same folder on a phone: a header with the owl mark and a status pill, the file list with a sync badge beside every name, and tabs for Files, Devices and Settings along the bottom."
+          />
+        </div>
+      </figure>
+
+      <div class="wrap">
+        <section class="section" aria-labelledby="how">
+          <p class="micro">How it works</p>
+          <h2 id="how">Two devices, one network, nothing in between</h2>
+          <dl class="points">
+            <dt>Nothing leaves your network.</dt>
+            <dd>
+              The two devices find each other with a broadcast on your own Wi-Fi and then talk
+              directly. Files never reach a relay, a cloud account or anyone's server, because
+              there is no server anywhere in this. The app is the whole system.
+            </dd>
+
+            <dt>The connection is TLS 1.3, pinned on both ends.</dt>
+            <dd>
+              Each device generates its own certificate the first time it runs and keeps the
+              private key. A paired device is a certificate fingerprint you have already approved,
+              so a connection is accepted only from a device you paired with. Anything else is
+              refused during the handshake, before it can send a byte.
+            </dd>
+
+            <dt>Both devices keep the whole folder.</dt>
+            <dd>
+              This is a copy on each device, not a window onto storage somewhere else. Open a file
+              on the plane with the phone in flight mode. Changes made while the two were apart
+              are exchanged the next time they see each other, and an edit on both sides keeps
+              both, one renamed rather than thrown away.
+            </dd>
+          </dl>
+        </section>
+
+        <section class="section" aria-labelledby="pairing">
+          <p class="micro">Pairing</p>
+          <h2 id="pairing">Six digits, once, with both devices in front of you</h2>
+          <p>
+            Open Devices on the phone, pick the computer from the list, and both screens show the
+            same six-digit number. Check that they match and press Accept. That number is derived
+            from the two certificates and a fresh random value, so a device in the middle cannot
+            make two different handshakes show the same code.
+          </p>
+          <p>
+            After that the two remember each other and reconnect on their own whenever they are on
+            the same network. Forget a device in Settings and its certificate stops being trusted,
+            so the next connection from it is refused. If the network blocks broadcasts, or you
+            are pairing against an emulator, type the other device's address instead: one side
+            dialling is enough, and the connection carries the folder in both directions.
+          </p>
+        </section>
+
+        <section class="section" aria-labelledby="cost">
+          <p class="micro">What it costs</p>
+          <h2 id="cost">Nothing, and there is nowhere for a bill to come from</h2>
+          <p>
+            There is no hosted service to pay for, no account to create, and no storage quota,
+            because your files only ever sit on hardware you already own. The only third party
+            involved is GitHub, which builds the releases and hosts the downloads above, and that
+            is free and unmetered on a public repository.
+          </p>
+          <p>
+            It is MIT licensed and the source is public, so you can read what it does with your
+            files and build it yourself.
+            <a href="https://github.com/danieltyukov/owl-transfer/blob/master/docs/ARCHITECTURE.md"
+              >The architecture document</a
+            >
+            describes the wire protocol, the merge rules and the threat model in full, for anyone
+            who wants to audit it before trusting it with a folder.
+          </p>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <div class="wrap">
+        <p>
+          <a href="https://github.com/danieltyukov/owl-transfer">github.com/danieltyukov/owl-transfer</a>
+          &middot;
+          <a href="https://github.com/danieltyukov/owl-transfer/blob/master/LICENSE">MIT</a>
+        </p>
+        <p class="fonts">
+          Set in subsets of two fonts, each licensed under the SIL Open Font License 1.1 and
+          renamed as the licence requires for a modified version. Instrument Sans, copyright 2022
+          the Instrument Sans Project Authors. JetBrains Mono, copyright 2020 the JetBrains Mono
+          Project Authors. Each licence text ships beside its font file in the repository.
+        </p>
+        <p class="fonts">
+          This page makes no third-party requests and sets no cookie. There is nothing here to
+          consent to.
+        </p>
+      </div>
+    </footer>
+
+    <script type="module" src="./theme.js"></script>
+  </body>
+</html>
