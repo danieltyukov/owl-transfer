@@ -5,9 +5,10 @@
 ## How it was checked
 
 <!--
-Which of these you ran, and anything you tried by hand. CI runs the first
-group on every push, so a note here is about what CI cannot see: two real
-devices, a phone, a large file, a network that drops.
+Which of these you ran, and anything you tried by hand. CI runs the list below
+on this pull request and again on every push to it, so a note here is about
+what CI cannot see: two real devices, a phone, a large file, a network that
+drops.
 
   npm run typecheck
   npm test

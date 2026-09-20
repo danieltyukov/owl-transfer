@@ -181,14 +181,21 @@ messages or documentation.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push and pull request, in three jobs.
-`rust` runs `cargo fmt --all --check`, clippy with warnings denied, the engine tests
-and the Windows cross-check. `web` runs the typecheck, the unit tests, the app
+`.github/workflows/ci.yml` runs on every push to `master`, on every pull
+request, and by hand from the Actions tab, in three jobs. `rust` runs
+`cargo fmt --all --check`, clippy with warnings denied, the engine tests and
+the Windows cross-check. `web` runs the typecheck, the unit tests, the app
 build and the Playwright smoke. `site` builds the site, which is a separate job
-because the site imports `app/src/tokens.css` from outside its own root:
-moving or renaming that file breaks the site, and a pull request should say so
-rather than the next deploy discovering it. CI needs no secrets, so it runs on
-forks.
+because the site imports `app/src/tokens.css` from outside its own root: moving
+or renaming that file breaks the site, and a pull request should say so rather
+than the next deploy discovering it. CI needs no secrets, so it runs on forks.
+
+Work on a branch is covered by its pull request and not by the push, which is
+deliberate. With both triggers firing on every branch, a push to a branch that
+had a pull request open ran the whole workflow twice, once per event, and the
+two runs sat in different concurrency groups because `github.ref` differs, so
+neither cancelled the other. Push a branch with nothing open against it and
+nothing runs until you open one, or start a run yourself from the Actions tab.
 
 `.github/workflows/pages.yml` builds `site/` and deploys it to GitHub Pages on
 push to `master`. Pages must be set to "GitHub Actions" as its source, once, in
