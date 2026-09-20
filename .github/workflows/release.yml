@@ -371,8 +371,9 @@ jobs:
           the commit this tag points at. The build log is public.
 
           - `owl-transfer.apk`, Android. Your browser asks once for permission to
-            install it. The app then asks for All files access, which is what
-            lets the folder live at `/storage/emulated/0/OwlTransfer`.
+            install it. Its first screen shows a card asking for All files
+            access, which is what lets the folder live at
+            `/storage/emulated/0/OwlTransfer`; sync starts once you grant it.
           - `owl-transfer_x86_64.AppImage`, Linux. `chmod +x` and run it.
           - `owl-transfer_amd64.deb`, Debian and Ubuntu:
             `sudo apt install ./owl-transfer_amd64.deb`
