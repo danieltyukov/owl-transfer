@@ -178,7 +178,7 @@ One advisory is open against a transitive dependency, and it cannot be fixed
 from this repository. It is written up here rather than left for a reader to
 find in the Dependabot tab and wonder about.
 
-**`glib`, unsoundness in the `Iterator` and `DoubleEndedIterator` impls for
+**`glib`, GHSA-wrw7-89jp-8q8g, unsoundness in the `Iterator` and `DoubleEndedIterator` impls for
 `VariantStrIter`.** It affects 0.15 through 0.19 and is fixed in 0.20. This
 project resolves `glib` 0.18.5.
 
@@ -205,6 +205,10 @@ below 0.20, and Tauri 2.11.6, the version this repository builds against, still
 builds on `gtk` 0.18. `cargo update -p glib` locks zero packages. It clears
 when Tauri moves to `gtk` 0.20, or when the Linux backend moves off GTK WebKit,
 and not before.
+
+The Dependabot alert for it is dismissed as "vulnerable code not used", with
+this section as the reason, so the repository shows no open alert for a
+finding it cannot act on. A new advisory reopens the review; this one does not.
 
 It is re-checked whenever Tauri is upgraded.
 
