@@ -10,6 +10,7 @@ import android.os.Environment
 import android.provider.OpenableColumns
 import android.util.Log
 import android.view.View
+import android.widget.Toast
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -140,6 +141,17 @@ class MainActivity : TauriActivity() {
     val uris = sharedUris(intent ?: return)
     if (uris.isEmpty()) return
 
+    // Asked here, on the thread that can say something back, rather than only
+    // on the worker. A share dropped in silence looks like the app losing
+    // someone's file. The activity is coming forward regardless, because the
+    // share is what started it, so the storage card on the Files screen is
+    // what they find behind this.
+    if (!Environment.isExternalStorageManager()) {
+      Log.i(TAG, "refusing the shared files: all files access has not been granted yet")
+      Toast.makeText(this, R.string.share_needs_storage, Toast.LENGTH_LONG).show()
+      return
+    }
+
     // The application's resolver and a plain File, captured before the work is
     // queued: a large copy would otherwise keep a destroyed activity reachable
     // until it finished.
@@ -166,13 +178,14 @@ class MainActivity : TauriActivity() {
 }
 
 /**
- * Whether there is any point in trying to write. Without all files access the
- * folder is not ours to touch, and the app already shows a card explaining
- * that, so this only has to say why in the log and stop.
+ * Whether there is any point in trying to write. `handleShare` has already
+ * turned away a share with no all files access and said so; this catches the
+ * narrow case of the grant being withdrawn while a copy was queued, where a log
+ * line is all there is to say.
  */
 private fun storageIsReachable(folder: File): Boolean {
   if (!Environment.isExternalStorageManager()) {
-    Log.i(TAG, "ignoring the shared files: all files access has not been granted yet")
+    Log.i(TAG, "ignoring the shared files: all files access was withdrawn")
     return false
   }
   if (!folder.isDirectory && !folder.mkdirs()) {
