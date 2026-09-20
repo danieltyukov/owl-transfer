@@ -12,13 +12,32 @@ const LIFETIME_MS = 6_000;
 
 let counter = 0;
 
+/**
+ * What in `next` was not in `previous`, for a list that rolls.
+ *
+ * `State.errors` is the last five, newest last, so a sixth error pushes the
+ * first off the front and the length never changes again. Counting is
+ * therefore the one thing that cannot work: the window has to be lined up by
+ * what is in it. The longest tail of `previous` that is also the head of
+ * `next` is the overlap, and everything past it is new.
+ *
+ * No overlap means the whole window turned over between looks, and all of it
+ * is new. Exported so the arithmetic is testable on its own.
+ */
+export function freshEntries(previous: readonly string[], next: readonly string[]): string[] {
+  const most = Math.min(previous.length, next.length);
+  for (let overlap = most; overlap > 0; overlap--) {
+    const tail = previous.slice(previous.length - overlap);
+    if (tail.every((line, index) => line === next[index])) return next.slice(overlap);
+  }
+  return [...next];
+}
+
 /*
  * Things that went wrong, said once and then out of the way.
  *
  * Two sources feed it: the `errors` the engine carries in its state, and the
- * failures of whatever the person just pressed. The engine's list is treated as
- * a log, so only what arrived since the last look is shown; a list that shrank
- * means it was cleared, and the count starts again.
+ * failures of whatever the person just pressed.
  */
 export function useToasts(errors: readonly string[]): {
   toasts: ToastItem[];
@@ -26,7 +45,7 @@ export function useToasts(errors: readonly string[]): {
   dismiss: (id: number) => void;
 } {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const seen = useRef(0);
+  const seen = useRef<readonly string[]>([]);
 
   const push = useCallback((text: string) => {
     counter += 1;
@@ -39,12 +58,8 @@ export function useToasts(errors: readonly string[]): {
   }, []);
 
   useEffect(() => {
-    if (errors.length < seen.current) {
-      seen.current = errors.length;
-      return;
-    }
-    const fresh = errors.slice(seen.current);
-    seen.current = errors.length;
+    const fresh = freshEntries(seen.current, errors);
+    seen.current = errors;
     for (const text of fresh) push(text);
   }, [errors, push]);
 

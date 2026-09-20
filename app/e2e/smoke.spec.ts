@@ -63,6 +63,31 @@ test('every pane is reachable from whichever navigation is on screen', async ({ 
   await expect(page.getByRole('group', { name: 'Appearance' })).toBeVisible();
 });
 
+test('a finger gets the taller row and a control it does not have to hover for', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const row = page.getByRole('button', { name: /^Photos/ });
+  await expect(row).toBeVisible();
+  const height = (await row.boundingBox())!.height;
+
+  // Playwright counts a fully transparent element as visible, so the overflow
+  // control has to be measured rather than asked.
+  const overflow = page.getByRole('button', { name: 'More for Photos' });
+  const opacity = await overflow.evaluate(el => getComputedStyle(el).opacity);
+
+  if (phone()) {
+    // `pointer: coarse` only matches on a real touch pointer. Without it the
+    // phone screenshots would be desktop sizes at a phone width.
+    expect(height).toBeGreaterThanOrEqual(44);
+    expect(opacity).toBe('1');
+  } else {
+    expect(height).toBeLessThan(44);
+    expect(opacity).toBe('0');
+  }
+});
+
 test('the dark theme reaches every ground, not only the page', async ({ page }) => {
   await page.goto('/');
 

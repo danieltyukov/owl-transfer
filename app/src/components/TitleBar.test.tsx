@@ -70,6 +70,16 @@ describe('TitleBar', () => {
     expect(await screen.findByRole('button', { name: 'Restore' })).toBeInTheDocument();
   });
 
+  it('says so when the shell refuses, rather than losing the rejection', async () => {
+    const user = userEvent.setup();
+    const driven = frame();
+    driven.close = () => Promise.reject(new Error('busy'));
+    render(<App backend={createMockBackend({ window: driven })} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Close' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The window would not close.');
+  });
+
   it('names where the window is, and leaves the brand to one place', async () => {
     render(<App backend={createMockBackend({ window: frame() })} />);
     const bar = await screen.findByRole('banner');

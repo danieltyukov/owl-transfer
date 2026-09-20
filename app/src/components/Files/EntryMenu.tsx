@@ -44,11 +44,20 @@ export function EntryMenu({ entry, at, onOpen, onRename, onDelete, onClose }: En
       onClose();
       return;
     }
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
 
     const items = [...(surface.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
     const here = items.indexOf(document.activeElement as HTMLElement);
-    const step = event.key === 'ArrowDown' ? 1 : -1;
+
+    // Tab wraps inside the menu rather than walking out into a page that is
+    // still under a layer swallowing every press.
+    const step =
+      event.key === 'ArrowDown' || (event.key === 'Tab' && !event.shiftKey)
+        ? 1
+        : event.key === 'ArrowUp' || (event.key === 'Tab' && event.shiftKey)
+          ? -1
+          : 0;
+    if (step === 0) return;
+
     const next = items[(here + step + items.length) % items.length];
     if (next !== undefined) {
       event.preventDefault();

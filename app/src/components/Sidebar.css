@@ -32,7 +32,9 @@
 .sidebar-folder {
   padding: 0 8px 14px;
   font-size: var(--fs-mini);
-  color: var(--faint);
+  /* Muted, not faint. It is a line a person reads, and it sits on the sidebar,
+     which is the lightest of the three grounds to read faint text on. */
+  color: var(--muted);
   /* Truncated at the start, not the end: the last segment is the name a person
      recognises and the home prefix is the part they already know. `rtl` moves
      the ellipsis to the front; `left` keeps the line itself flush with the nav

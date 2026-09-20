@@ -4,9 +4,11 @@
 }
 
 /*
- * A tinted inset border rather than a dashed rectangle around the window. The
- * list stays readable underneath, which matters: what is already in the folder
- * is what tells a person they are dropping into the right one.
+ * An inset dashed border rather than a rectangle around the whole window, and
+ * a wash rather than a fill. The list stays readable underneath, which matters:
+ * what is already in the folder is what tells a person they are dropping into
+ * the right one. The amber border and the hint carry the signal, so the ground
+ * does not have to.
  */
 .dropzone::after {
   content: '';
@@ -14,14 +16,14 @@
   inset: 6px;
   border: 2px dashed var(--accent);
   border-radius: var(--r-panel);
-  background: var(--accent-tint);
+  background: var(--hover);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-quick) var(--ease);
 }
 
 .dropzone[data-over]::after {
-  opacity: 0.85;
+  opacity: 1;
 }
 
 .dropzone-hint {

@@ -135,7 +135,7 @@ export function Devices({ backend, state, onError }: DevicesProps) {
               <dt>Name</dt>
               <dd>{state.device.name}</dd>
               <dt>Id</dt>
-              <dd className="mono">{state.device.id.slice(0, 8)}</dd>
+              <dd className="mono self-id">{state.device.id.slice(0, 8)}</dd>
               {state.device.addresses.length === 0 ? (
                 <>
                   <dt>Port</dt>

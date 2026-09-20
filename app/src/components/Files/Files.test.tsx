@@ -241,6 +241,26 @@ describe('the row menu', () => {
     expect(opener).toHaveFocus();
   });
 
+  it('keeps Tab inside itself, since the page behind it cannot be pressed', async () => {
+    const user = userEvent.setup();
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    await user.click(screen.getByRole('button', { name: 'More for readme.txt' }));
+    expect(screen.getByRole('menuitem', { name: 'Open' })).toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    await user.tab();
+    await user.tab();
+    // Round, not out into a page that is still under a layer swallowing every
+    // press.
+    expect(screen.getByRole('menuitem', { name: 'Open' })).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+  });
+
   it('closes when the press lands anywhere else', async () => {
     const user = userEvent.setup();
     render(<App backend={createMockBackend()} />);
@@ -264,5 +284,100 @@ describe('the row menu', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Open' }));
 
     expect(await screen.findByRole('heading', { name: 'Photos' })).toBeInTheDocument();
+  });
+});
+
+describe('listings that land out of order', () => {
+  it('never renders one folder under another folder’s name', async () => {
+    const user = userEvent.setup();
+    const mock = createMockBackend();
+
+    // Every listing is held open, so the order they finish in is the test's.
+    const waiting: Array<{ path: string; settle: () => void }> = [];
+    const real = mock.listDir.bind(mock);
+    mock.listDir = path =>
+      new Promise(resolve => {
+        waiting.push({ path, settle: () => void real(path).then(resolve) });
+      });
+
+    render(<App backend={mock} />);
+
+    // The listing the pane opened with.
+    await vi.waitFor(() => expect(waiting).toHaveLength(1));
+    waiting[0]!.settle();
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    // A change to this directory starts a second listing of it.
+    mock.emitDirChanged('');
+    await vi.waitFor(() => expect(waiting).toHaveLength(2));
+
+    // Walk into a subfolder while that one is still in flight.
+    await user.click(screen.getByRole('button', { name: /^Photos/ }));
+    await vi.waitFor(() => expect(waiting).toHaveLength(3));
+    waiting[2]!.settle();
+    expect(await screen.findByRole('button', { name: /^lighthouse\.jpg/ })).toBeInTheDocument();
+
+    // Now the stale one comes back. It is the parent's contents and it must
+    // not appear under the child's breadcrumb.
+    waiting[1]!.settle();
+    await vi.waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Photos' })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole('button', { name: /^readme\.txt/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /^lighthouse\.jpg/ })).toBeInTheDocument();
+  });
+});
+
+describe('a long press on a touch screen', () => {
+  const rowFor = (name: string): HTMLElement =>
+    screen.getByRole('button', { name: `More for ${name}` }).closest('li')!;
+
+  const longPress = async (name: string) => {
+    const row = rowFor(name);
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 40, clientY: 40 });
+    // The menu appears when the 500ms timer fires.
+    const menu = await screen.findByRole('menu', { name });
+    fireEvent.pointerUp(row);
+    return menu;
+  };
+
+  it('opens the menu without also opening the entry', async () => {
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    await longPress('Photos');
+
+    // The browser makes a click out of the same touch. Without the guard it
+    // lands on the row and walks into the folder behind the open menu.
+    fireEvent.click(screen.getByRole('button', { name: /^Photos/ }));
+    expect(screen.getByRole('heading', { name: 'OwlTransfer' })).toBeInTheDocument();
+    expect(screen.getByRole('menu', { name: 'Photos' })).toBeInTheDocument();
+  });
+
+  it('leaves the next press alone, so the row is not dead afterwards', async () => {
+    const user = userEvent.setup();
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    await longPress('Photos');
+    await user.keyboard('{Escape}');
+
+    // One task after the finger lifts the guard is gone, and a plain press
+    // opens the folder the way it always did.
+    await user.click(screen.getByRole('button', { name: /^Photos/ }));
+    expect(await screen.findByRole('heading', { name: 'Photos' })).toBeInTheDocument();
+  });
+
+  it('does not arm on a scroll that happens to start on a row', async () => {
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    const row = rowFor('Photos');
+    fireEvent.pointerDown(row, { pointerType: 'touch', clientX: 40, clientY: 40 });
+    fireEvent.pointerMove(row, { pointerType: 'touch', clientX: 40, clientY: 90 });
+    fireEvent.pointerUp(row);
+
+    await new Promise(resolve => setTimeout(resolve, 600));
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });

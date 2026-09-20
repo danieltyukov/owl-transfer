@@ -61,10 +61,26 @@ const SLOP_PX = 6;
 export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) {
   const Glyph = glyphFor(entry);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  /*
+   * Set when the long press opens the menu, so the click the browser makes out
+   * of the same touch does not also open the entry. Cleared one task after the
+   * finger lifts: the compatibility click is dispatched inside that task, so it
+   * still sees the flag, and nothing is left set if the menu's own layer
+   * swallowed the click instead.
+   */
+  const fromLongPress = useRef(false);
 
   const cancelPress = (): void => {
     if (press.current !== null) window.clearTimeout(press.current.timer);
     press.current = null;
+  };
+
+  const releasePress = (): void => {
+    cancelPress();
+    if (!fromLongPress.current) return;
+    window.setTimeout(() => {
+      fromLongPress.current = false;
+    }, 0);
   };
 
   return (
@@ -82,6 +98,7 @@ export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) 
           y: at.y,
           timer: window.setTimeout(() => {
             press.current = null;
+            fromLongPress.current = true;
             onMenu(entry, at);
           }, LONG_PRESS_MS),
         };
@@ -93,10 +110,17 @@ export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) 
           cancelPress();
         }
       }}
-      onPointerUp={cancelPress}
-      onPointerCancel={cancelPress}
+      onPointerUp={releasePress}
+      onPointerCancel={releasePress}
     >
-      <button type="button" className="row-main" onClick={() => onOpen(entry)}>
+      <button
+        type="button"
+        className="row-main"
+        onClick={() => {
+          if (fromLongPress.current) return;
+          onOpen(entry);
+        }}
+      >
         <span className="row-glyph" aria-hidden="true">
           <Glyph />
         </span>

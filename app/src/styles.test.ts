@@ -99,15 +99,22 @@ describe('the stylesheets', () => {
     }
   });
 
-  it('switches to the phone layout at one width', () => {
-    const breakpoints = new Set<string>();
+  it('switches to the phone layout at one width, and measures from one side', () => {
+    const maxWidths = new Set<string>();
+    const minWidths = new Set<string>();
     for (const sheet of SHEETS) {
       for (const [, width] of sheet.code.matchAll(/@media \(max-width:\s*(\d+)px\)/g)) {
-        breakpoints.add(width!);
+        maxWidths.add(width!);
+      }
+      for (const [, width] of sheet.code.matchAll(/@media \(min-width:\s*(\d+)px\)/g)) {
+        minWidths.add(width!);
       }
     }
     // 899 is the pane switch. The two below it are content giving way on a
     // narrow phone, not a second layout.
-    expect([...breakpoints].sort()).toEqual(['480', '560', '899']);
+    expect([...maxWidths].sort()).toEqual(['480', '560', '899']);
+    // One direction only. A min-width query beside these would mean two
+    // opinions about where the layout changes, and one of them unlisted.
+    expect([...minWidths]).toEqual([]);
   });
 });

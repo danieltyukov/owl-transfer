@@ -15,6 +15,20 @@ export interface PairingCardProps {
  * place the mono runs at that size. Its tracking groups the digits, because
  * the job is to be read off one screen and checked against another.
  */
+/**
+ * The code as six spoken digits: "4 8 2, 9 1 3".
+ *
+ * Left alone, "482 913" is announced as "four hundred eighty-two, nine hundred
+ * thirteen", which is not a thing anyone can check against another screen.
+ */
+export function spellCode(code: string): string {
+  return code
+    .trim()
+    .split(/\s+/)
+    .map(group => [...group].join(' '))
+    .join(', ');
+}
+
 export function PairingCard({ pairing, onRespond }: PairingCardProps) {
   const incoming = pairing.direction === 'incoming';
   return (
@@ -23,7 +37,9 @@ export function PairingCard({ pairing, onRespond }: PairingCardProps) {
         {incoming ? `${pairing.name} wants to pair` : `Pairing with ${pairing.name}`}
       </p>
 
-      <p className="pairing-code mono">{pairing.code}</p>
+      <p className="pairing-code mono" aria-label={spellCode(pairing.code)}>
+        {pairing.code}
+      </p>
 
       <p className="pairing-note">
         {incoming

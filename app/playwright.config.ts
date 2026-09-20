@@ -28,9 +28,18 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } },
     },
     {
-      // A Pixel-sized portrait window, which is the layout the tabs exist for.
+      /*
+       * A real touch device, not a narrow desktop window.
+       *
+       * The viewport alone makes the pane layout swap, but `pointer: coarse`
+       * never matches without touch, so the 44px row, the always-visible
+       * overflow control, the 40px menu items and the 36px inputs would all be
+       * drawn at their desktop sizes in every screenshot. The device
+       * descriptor brings touch and the mobile user agent; the viewport is
+       * overridden to the 390x844 the plan names.
+       */
       name: 'phone',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 } },
+      use: { ...devices['Pixel 7'], viewport: { width: 390, height: 844 } },
     },
   ],
   webServer: {

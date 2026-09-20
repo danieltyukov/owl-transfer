@@ -20,9 +20,21 @@ import './WindowControls.css';
 
 export interface WindowControlsProps {
   frame: WindowFrame;
+  onError: (message: string) => void;
 }
 
-export function WindowControls({ frame }: WindowControlsProps) {
+/**
+ * Every call into the shell, with somewhere for a rejection to go.
+ *
+ * A discarded promise from an inter-process call is an unhandled rejection,
+ * and a window that quietly refuses to close is worse than one that says it
+ * could not.
+ */
+function ask(call: () => Promise<void>, failure: string, onError: (m: string) => void): void {
+  void call().catch(() => onError(failure));
+}
+
+export function WindowControls({ frame, onError }: WindowControlsProps) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -54,7 +66,7 @@ export function WindowControls({ frame }: WindowControlsProps) {
         type="button"
         className="window-control"
         aria-label="Minimize"
-        onClick={() => void frame.minimize()}
+        onClick={() => ask(() => frame.minimize(), 'The window would not minimize.', onError)}
       >
         <MinimizeGlyph />
       </button>
@@ -67,7 +79,7 @@ export function WindowControls({ frame }: WindowControlsProps) {
         type="button"
         className="window-control"
         aria-label={maximized ? 'Restore' : 'Maximize'}
-        onClick={() => void frame.toggleMaximize()}
+        onClick={() => ask(() => frame.toggleMaximize(), 'The window would not resize.', onError)}
       >
         {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
@@ -75,7 +87,7 @@ export function WindowControls({ frame }: WindowControlsProps) {
         type="button"
         className="window-control window-close"
         aria-label="Close"
-        onClick={() => void frame.close()}
+        onClick={() => ask(() => frame.close(), 'The window would not close.', onError)}
       >
         <CloseGlyph />
       </button>
@@ -125,6 +137,7 @@ const CLICKABLE = [
  */
 export function windowGrab(
   frame: WindowFrame | null,
+  onError: (message: string) => void,
 ): ((e: MouseEvent<HTMLElement>) => void) | undefined {
   if (frame === null) return undefined;
   return e => {
@@ -135,7 +148,7 @@ export function windowGrab(
     // The browser would otherwise start a text selection under the pointer and
     // carry it along for the whole drag.
     e.preventDefault();
-    if (e.detail === 2) void frame.toggleMaximize();
-    else if (e.detail === 1) void frame.startDrag();
+    if (e.detail === 2) ask(() => frame.toggleMaximize(), 'The window would not resize.', onError);
+    else if (e.detail === 1) ask(() => frame.startDrag(), 'The window would not move.', onError);
   };
 }

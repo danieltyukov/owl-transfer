@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../App.js';
+import { spellCode } from './PairingCard.js';
 import { createMockBackend, type MockBackend } from '../../backend/mock.js';
 
 const openDevices = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -52,6 +53,21 @@ describe('the devices pane', () => {
     expect(card).toHaveTextContent('Pairing with studio');
     expect(card).toHaveTextContent('482 913');
     expect(within(card).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('gives the code a name that is read back as six digits', async () => {
+    const mock = createMockBackend();
+    const user = await show(mock);
+
+    await user.click(
+      within(screen.getByRole('region', { name: 'Nearby' })).getByRole('button', { name: 'Pair' }),
+    );
+    const card = await screen.findByRole('region', { name: 'Pairing' });
+
+    // Left alone, "482 913" is announced as "four hundred eighty-two, nine
+    // hundred thirteen", which is not something anyone can check against
+    // another screen.
+    expect(within(card).getByLabelText('4 8 2, 9 1 3')).toHaveTextContent('482 913');
   });
 
   it('takes the request back when the outgoing card is cancelled', async () => {
@@ -179,5 +195,15 @@ describe('the devices pane', () => {
         /No other device found on this network/,
       ),
     ).toBeInTheDocument();
+  });
+});
+
+describe('spellCode', () => {
+  it('spaces the digits and keeps the grouping', () => {
+    expect(spellCode('482 913')).toBe('4 8 2, 9 1 3');
+  });
+
+  it('copes with a code the engine did not group', () => {
+    expect(spellCode('482913')).toBe('4 8 2 9 1 3');
   });
 });

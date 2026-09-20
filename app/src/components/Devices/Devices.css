@@ -123,6 +123,12 @@
   color: var(--text);
 }
 
+/* Tracked, like the pairing code: eight hex characters are read out to
+   somebody holding the other device, and the gaps are what keep their place. */
+.self-id {
+  letter-spacing: var(--ls-micro);
+}
+
 /* A machine on a wired network and a VPN has two, and neither of them is the
    one to use more often than the other, so they stack rather than one being
    chosen for the person. */

@@ -43,6 +43,10 @@ export function DropZone({ label, children }: DropZoneProps) {
         event.dataTransfer.dropEffect = 'copy';
       }}
       onDragLeave={() => {
+        // Only a drag that carried files ever incremented this, so only one
+        // that did may decrement it. Otherwise a drag of something else across
+        // the pane drives the count below zero.
+        if (!over) return;
         depth.current -= 1;
         if (depth.current <= 0) reset();
       }}

@@ -111,6 +111,14 @@ const THEMES = [
  * fills the in-flight arc, and a test below asserts it is never a text colour.
  * Anything that wants amber words uses `accent-hover`.
  */
+/*
+ * The three grounds text is set on. `surface-2` is the sidebar, and the
+ * sidebar carries the folder path, the navigation and the device names, so it
+ * is as much a text ground as the page and the panel. Leaving it out is what
+ * let `--faint` ship at 4.3:1 there.
+ */
+const GROUNDS = ['bg', 'surface', 'surface-2'] as const;
+
 const FOREGROUNDS: ReadonlyArray<readonly [token: string, min: number]> = [
   ['text', 4.5],
   ['muted', 4.5],
@@ -129,10 +137,18 @@ describe('tokens.css', () => {
     }
   });
 
-  it('gives no colour its only definition inside a media query', () => {
-    for (const key of Object.keys(SYSTEM_DARK)) {
-      if (!key.startsWith('--')) continue;
-      expect(LIGHT[key], `${key} is defined only under prefers-color-scheme`).toBeDefined();
+  it('gives no colour its only definition inside a dark block', () => {
+    // Both blocks, not just the system one. They are asserted identical below,
+    // which makes checking one enough today and wrong the moment that
+    // assertion is the thing that breaks.
+    for (const [where, block] of [
+      ['prefers-color-scheme', SYSTEM_DARK],
+      ["data-theme='dark'", EXPLICIT_DARK],
+    ] as const) {
+      for (const key of Object.keys(block)) {
+        if (!key.startsWith('--')) continue;
+        expect(LIGHT[key], `${key} is defined only under ${where}`).toBeDefined();
+      }
     }
   });
 
@@ -149,9 +165,10 @@ describe('tokens.css', () => {
   });
 
   for (const [name, palette] of THEMES) {
-    it(`${name}: text reads on the ground it is set on`, () => {
-      expect(contrast(palette['--text']!, palette['--bg']!)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(palette['--text']!, palette['--surface']!)).toBeGreaterThanOrEqual(4.5);
+    it(`${name}: text reads on every ground it is set on`, () => {
+      for (const ground of GROUNDS) {
+        expect(contrast(palette['--text']!, palette[`--${ground}`]!)).toBeGreaterThanOrEqual(4.5);
+      }
     });
 
     it(`${name}: the label on a filled accent control clears 4.5:1`, () => {
@@ -164,7 +181,7 @@ describe('tokens.css', () => {
     });
 
     for (const [token, min] of FOREGROUNDS) {
-      for (const ground of ['bg', 'surface'] as const) {
+      for (const ground of GROUNDS) {
         it(`${name}: ${token} clears ${min}:1 on ${ground}`, () => {
           expect(contrast(palette[`--${token}`]!, palette[`--${ground}`]!)).toBeGreaterThanOrEqual(
             min,

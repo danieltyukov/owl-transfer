@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { Backend, DirEntry, State } from '../../backend/types.js';
 import { FolderPlusGlyph, PlusGlyph } from '../../icons/glyphs.js';
@@ -67,7 +67,18 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
   const [draft, setDraft] = useState('');
   const now = Date.now();
 
+  /*
+   * Whatever listing is in flight, so it can be dropped.
+   *
+   * Two things start one: arriving in a directory, and the engine saying this
+   * directory went stale. Without a single handle on both, a listing started
+   * by the second can land after the first has moved on and write the parent's
+   * contents under the child's breadcrumb.
+   */
+  const inFlight = useRef<(() => void) | null>(null);
+
   const reload = useCallback(() => {
+    inFlight.current?.();
     let live = true;
     void backend.listDir(dir).then(
       next => {
@@ -77,12 +88,22 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
         if (live) setEntries([]);
       },
     );
-    return () => {
+    const drop = (): void => {
       live = false;
     };
+    inFlight.current = drop;
+    return drop;
   }, [backend, dir]);
 
-  useEffect(() => reload(), [reload]);
+  useEffect(() => {
+    reload();
+    return () => {
+      // Leaving the directory, or leaving the pane. Either way nothing a
+      // request started here has to say is worth hearing any more.
+      inFlight.current?.();
+      inFlight.current = null;
+    };
+  }, [reload]);
 
   useEffect(
     () =>
@@ -122,23 +143,23 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
   const problem = nameProblem(draft);
 
   const submit = (): void => {
-    const open = dialogue;
+    const pending = dialogue;
     setDialogue(null);
-    if (open === null) return;
+    if (pending === null) return;
     const name = draft.trim();
 
-    if (open.kind === 'new-folder') {
+    if (pending.kind === 'new-folder') {
       void backend
         .createFolder(dir === '' ? name : `${dir}/${name}`)
         .catch(() => onError(`${name} could not be created.`));
-    } else if (open.kind === 'rename') {
+    } else if (pending.kind === 'rename') {
       void backend
-        .renameEntry(open.entry.path, name)
-        .catch(() => onError(`${open.entry.name} could not be renamed.`));
+        .renameEntry(pending.entry.path, name)
+        .catch(() => onError(`${pending.entry.name} could not be renamed.`));
     } else {
       void backend
-        .deleteEntry(open.entry.path)
-        .catch(() => onError(`${open.entry.name} could not be deleted.`));
+        .deleteEntry(pending.entry.path)
+        .catch(() => onError(`${pending.entry.name} could not be deleted.`));
     }
   };
 

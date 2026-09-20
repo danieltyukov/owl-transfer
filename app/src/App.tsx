@@ -40,7 +40,7 @@ export function App({ backend }: AppProps) {
   const { toasts, push, dismiss } = useToasts(state?.errors ?? EMPTY);
 
   const frame = backend.window;
-  const grab = windowGrab(frame);
+  const grab = windowGrab(frame, push);
 
   // One frame on a desktop, a little longer on a phone still opening the
   // folder. An empty shell rather than a spinner: there is nothing to wait for
@@ -53,7 +53,7 @@ export function App({ backend }: AppProps) {
 
   return (
     <div className="shell" data-framed={frame === null ? undefined : ''} onMouseDown={grab}>
-      {frame === null ? null : <TitleBar frame={frame} title={title} />}
+      {frame === null ? null : <TitleBar frame={frame} title={title} onError={push} />}
 
       <div className="app" data-pane={pane}>
         <Sidebar pane={pane} onPane={setPane} state={state} framed={frame !== null} />

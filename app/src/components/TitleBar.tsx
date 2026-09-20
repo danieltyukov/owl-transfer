@@ -8,6 +8,7 @@ export interface TitleBarProps {
   frame: WindowFrame;
   /** What the window is showing: Files, Devices or Settings. */
   title: string;
+  onError: (message: string) => void;
 }
 
 /*
@@ -17,7 +18,7 @@ export interface TitleBarProps {
  * the right, the whole strip a drag handle. That is the shape the platform's
  * users already read, and it lets a pane header go back to being a pane header.
  */
-export function TitleBar({ frame, title }: TitleBarProps) {
+export function TitleBar({ frame, title, onError }: TitleBarProps) {
   return (
     <header className="titlebar" data-window-drag="">
       <div className="titlebar-brand">
@@ -34,7 +35,7 @@ export function TitleBar({ frame, title }: TitleBarProps) {
         {title}
       </p>
 
-      <WindowControls frame={frame} />
+      <WindowControls frame={frame} onError={onError} />
     </header>
   );
 }
