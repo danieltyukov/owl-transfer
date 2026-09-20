@@ -1,0 +1,149 @@
+.devices-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * A bounded list rather than free-standing rows: the two lists on this screen
+ * mean different things, and a shared edge is what says where one ends.
+ */
+.devices-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.device:last-child {
+  border-bottom: 0;
+}
+
+.device-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.device-lines {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.device-name {
+  font-size: var(--fs-small);
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-detail {
+  font-size: var(--fs-mini);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+}
+
+.device-dot[data-connected] {
+  background: var(--success);
+  box-shadow: none;
+}
+
+.device-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+}
+
+.address-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.address-field {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.address-port {
+  flex: 0 0 82px;
+}
+
+.address-label {
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+/* Label beside value, two columns, so the facts read as a small table and the
+   addresses line up under each other for someone reading them out. The label
+   column holds the longest of them, "Addresses", without crowding it. */
+.self {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 4px 10px;
+  margin: 0;
+  font-size: var(--fs-small);
+}
+
+.self dt {
+  color: var(--muted);
+}
+
+.self dd {
+  margin: 0;
+  color: var(--text);
+}
+
+/* Tracked, like the pairing code: eight hex characters are read out to
+   somebody holding the other device, and the gaps are what keep their place. */
+.self-id {
+  letter-spacing: var(--ls-micro);
+}
+
+/* A machine on a wired network and a VPN has two, and neither of them is the
+   one to use more often than the other, so they stack rather than one being
+   chosen for the person. */
+.self-addresses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+@media (max-width: 480px) {
+  .address-row {
+    flex-wrap: wrap;
+  }
+
+  .address-row .button {
+    width: 100%;
+  }
+}

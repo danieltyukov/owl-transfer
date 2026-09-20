@@ -1,0 +1,56 @@
+/*
+ * The one loud element in the interface.
+ *
+ * Everything else is hairlines on paper. This is a tinted panel with an amber
+ * edge, because it is the only thing on screen that is waiting for a person and
+ * will time out without them.
+ */
+.pairing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 20px 16px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-panel);
+  background: var(--accent-tint);
+  text-align: center;
+}
+
+.pairing-lead {
+  font-size: var(--fs-large);
+  font-weight: 600;
+  letter-spacing: var(--ls-h2);
+  color: var(--text);
+}
+
+.pairing-code {
+  font-size: var(--fs-code);
+  font-weight: 600;
+  /* Grouped, because the code is read out loud across a room. */
+  letter-spacing: var(--ls-micro);
+  line-height: 1.1;
+  color: var(--accent-hover);
+}
+
+.pairing-note {
+  max-width: 30ch;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+}
+
+.pairing-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+/* The tint is the card's ground, so a button that also fills with the surface
+   would disappear into it. */
+.pairing .button {
+  background: var(--surface);
+}
+
+.pairing .button-primary {
+  background: var(--accent-hover);
+}

@@ -1,0 +1,159 @@
+/*
+ * The shell's geometry.
+ *
+ * One grid at both widths. The desktop puts the sidebar in the first column;
+ * the phone drops that column and adds a row of tabs at the bottom. The status
+ * strip spans every column in both, because it reports on the folder rather
+ * than on whichever pane is open.
+ */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+  /*
+   * The system bars, paid for here and nowhere else.
+   *
+   * Android draws the WebView edge to edge and index.html asks for the same
+   * with `viewport-fit=cover`, so the viewport spans the status bar and the
+   * navigation bar. Everything hangs off this element, so one rule keeps the
+   * tabs clear of the navigation bar and the title bar clear of the clock.
+   * Every inset is zero on a desktop, which is why there is no media query.
+   */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
+}
+
+.app {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.app > .sidebar {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.pane {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app > .status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+/* The scrolling body of a pane, under whatever header that pane draws. */
+.pane-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A pane whose content is a column of panels rather than a list of rows:
+   Devices and Settings. Held to a comfortable measure so a setting's label and
+   its control stay near each other on a wide window. */
+.pane-column {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 640px;
+  padding: 16px;
+}
+
+.pane-title {
+  padding: 16px 16px 0;
+}
+
+.tabs {
+  display: none;
+}
+
+@media (max-width: 899px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto auto;
+  }
+
+  .app > .sidebar {
+    display: none;
+  }
+
+  .pane {
+    grid-column: 1;
+    /* A pane change is an answer to a press, so it says something changed. The
+       desktop swaps panes in a column that is already on screen and needs no
+       announcement. */
+    animation: pane-in var(--dur-base) var(--ease);
+  }
+
+  .app > .status {
+    grid-row: 2;
+  }
+
+  .tabs {
+    display: flex;
+    grid-column: 1;
+    grid-row: 3;
+    /* The bottom inset belongs to the shell. Paying it twice would leave a
+       navigation bar's worth of empty room under the tabs. */
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .pane-column {
+    max-width: none;
+  }
+}
+
+@keyframes pane-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.tab {
+  flex: 1 1 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 54px;
+  padding-block: 6px;
+  font-size: var(--fs-micro);
+  color: var(--muted);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.tab-glyph {
+  display: grid;
+  place-items: center;
+}
+
+.tab-glyph svg {
+  width: 20px;
+  height: 20px;
+}
+
+.tab[aria-current='page'] {
+  color: var(--accent-hover);
+  font-weight: 500;
+}

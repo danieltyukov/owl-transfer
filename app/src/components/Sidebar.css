@@ -1,0 +1,129 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: var(--sidebar-w);
+  padding: 10px 8px 12px;
+  background: var(--surface-2);
+  border-inline-end: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px;
+}
+
+.brand-mark {
+  color: var(--accent);
+}
+
+.brand-word {
+  color: var(--text);
+}
+
+/*
+ * The folder the whole app is about, under the brand where a subtitle would be.
+ * Truncated at the start rather than the end: the last segment is the name a
+ * person recognises, and the home prefix is the part they already know.
+ */
+.sidebar-folder {
+  padding: 0 8px 14px;
+  font-size: var(--fs-mini);
+  /* Muted, not faint. It is a line a person reads, and it sits on the sidebar,
+     which is the lightest of the three grounds to read faint text on. */
+  color: var(--muted);
+  /* Truncated at the start, not the end: the last segment is the name a person
+     recognises and the home prefix is the part they already know. `rtl` moves
+     the ellipsis to the front; `left` keeps the line itself flush with the nav
+     under it, which `start` would not in an rtl box. */
+  direction: rtl;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding-inline: 8px;
+  border-radius: var(--r-control);
+  font-size: var(--fs-small);
+  color: var(--muted);
+  text-align: start;
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.nav-item:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+/* The accent marks the current pane with a tint and the text colour, not with
+   a filled block. */
+.nav-item[aria-current='page'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+.nav-glyph {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  color: var(--faint);
+  transition: color var(--dur-quick) var(--ease);
+}
+
+.nav-item:hover .nav-glyph,
+.nav-item[aria-current='page'] .nav-glyph {
+  color: inherit;
+}
+
+.nav-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Hollow until the peer answers, which is the same language the status strip
+   speaks: an outline is a device that is paired, a fill is one that is here. */
+.nav-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+  transition: background-color var(--dur-base) var(--ease);
+}
+
+.nav-dot[data-connected] {
+  background: var(--success);
+  box-shadow: none;
+}
+
+.sidebar-head {
+  padding: 16px 8px 5px;
+}
+
+@media (pointer: coarse) {
+  .nav-item {
+    min-height: 40px;
+  }
+}

@@ -1,0 +1,52 @@
+/*
+ * One strip across the top of a window that has no native bar.
+ *
+ * The three pieces are not a three-column grid, because the two ends are
+ * different widths and a centre column between them would be centred on the
+ * space left over rather than on the window. The title is taken out of the flow
+ * and centred on the strip itself, which is where a title bar's title belongs.
+ */
+
+.titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--titlebar-h);
+  padding-inline-start: 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  /* The strip is a handle. Without this a drag across it selects the title. */
+  user-select: none;
+}
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  /* Above the centred title, so a long title slides under the brand rather
+     than over it. */
+  z-index: 1;
+}
+
+.titlebar .brand-mark {
+  color: var(--accent);
+}
+
+.titlebar .brand-word {
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.titlebar-title {
+  position: absolute;
+  inset-inline: 0;
+  margin-inline: auto;
+  max-width: 52%;
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

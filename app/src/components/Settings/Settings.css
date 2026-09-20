@@ -1,0 +1,64 @@
+.settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-value {
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+/* A path is the one string here that has no good place to break, so it wraps
+   anywhere rather than pushing the card wider than the column. */
+.settings-path {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Three choices that are one setting, so they share an outline instead of
+ * standing as three buttons. The chosen one is tinted rather than filled: a
+ * filled segment in the accent would be the loudest thing on a screen whose
+ * loud thing is the pairing code.
+ */
+.segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  overflow: hidden;
+}
+
+.segment {
+  min-height: 30px;
+  padding-inline: 12px;
+  border-inline-start: 1px solid var(--border-strong);
+  font-size: var(--fs-mini);
+  color: var(--muted);
+  transition:
+    background-color var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.segment:first-child {
+  border-inline-start: 0;
+}
+
+.segment:hover {
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+.segment[aria-pressed='true'] {
+  background-color: var(--accent-tint);
+  color: var(--accent-hover);
+  font-weight: 500;
+}
+
+@media (pointer: coarse) {
+  .segment {
+    min-height: 36px;
+  }
+}

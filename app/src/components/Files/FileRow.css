@@ -1,0 +1,108 @@
+/*
+ * A row in the file list.
+ *
+ * Hairline separated rather than carded: a folder is a list of things, and
+ * fifty rounded boxes with fifty shadows is a list that is harder to scan than
+ * fifty lines. The columns are fixed from the right so names of any length
+ * leave the sizes and the times aligned down the page.
+ */
+
+.row {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row-main {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 72px 88px;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: var(--row-h);
+  padding-inline: 14px 4px;
+  text-align: start;
+  font-size: var(--fs-small);
+  color: var(--text);
+  transition: background-color var(--dur-quick) var(--ease);
+}
+
+.row-main:hover {
+  background-color: var(--hover);
+}
+
+.row-glyph {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+
+.row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-size {
+  font-size: var(--fs-mini);
+  color: var(--faint);
+  text-align: end;
+}
+
+.row-when {
+  font-size: var(--fs-mini);
+  color: var(--faint);
+  text-align: end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-more {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  color: var(--faint);
+  opacity: 0;
+  transition:
+    opacity var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+/* Shown on the row under the pointer, and always once it has focus, so it is
+   never a control that exists only for people using a mouse. */
+.row:hover .row-more,
+.row-more:focus-visible,
+.row-more[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.row-more:hover {
+  color: var(--text);
+}
+
+/* A finger has no hover, so the control is simply always there. */
+@media (pointer: coarse) {
+  .row-more {
+    opacity: 1;
+  }
+}
+
+/* A narrow phone has room for the name, the badge and the size. The time is
+   the first thing to go: it is the least of the three. */
+@media (max-width: 560px) {
+  .row-main {
+    grid-template-columns: 16px minmax(0, 1fr) auto 72px;
+    padding-inline-start: 12px;
+  }
+
+  .row-when {
+    display: none;
+  }
+}

@@ -1,0 +1,71 @@
+/*
+ * The spine. One row across the bottom of the window, a hairline above it, and
+ * the same mark at its head that a file row carries: a dot when nothing is
+ * moving, the arc when something is.
+ */
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--fs-mini);
+}
+
+.status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+  transition: background-color var(--dur-base) var(--ease);
+}
+
+.status[data-tone='ok'] .status-dot {
+  background: var(--success);
+}
+
+.status[data-tone='work'] .status-dot {
+  background: var(--accent);
+}
+
+/* Hollow, because nothing is connected: there is no state to report rather
+   than a state that is idle. */
+.status[data-tone='idle'] .status-dot {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+}
+
+.status-text {
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-rate {
+  color: var(--muted);
+}
+
+.status-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.status-sep {
+  color: var(--border-strong);
+}
+
+/* A phone in portrait has room for the sentence or for the counts, not both.
+   The sentence is the one that answers the question. */
+@media (max-width: 480px) {
+  .status-meta {
+    display: none;
+  }
+}

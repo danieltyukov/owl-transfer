@@ -1,0 +1,18 @@
+.ring {
+  flex: 0 0 auto;
+  /* Starts at twelve o'clock and runs clockwise, which is the direction a
+     person reads a dial. An unrotated arc starts at three. */
+  transform: rotate(-90deg);
+}
+
+.ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+}
+
+.ring-arc {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--dur-base) var(--ease);
+}

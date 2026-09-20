@@ -1,0 +1,13 @@
+.wordmark {
+  font-size: var(--fs-large);
+  font-weight: 600;
+  letter-spacing: var(--ls-h2);
+  /* A single line. The brand sits in rows sized to their own type, not to the
+     paragraph leading this would otherwise inherit. */
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.wordmark-tail {
+  font-weight: 400;
+}

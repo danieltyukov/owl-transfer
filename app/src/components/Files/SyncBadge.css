@@ -1,0 +1,43 @@
+.badge {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+
+.badge-synced {
+  color: var(--success);
+}
+
+.badge-synced svg {
+  width: 14px;
+  height: 14px;
+}
+
+.badge-waiting .badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/*
+ * The two states that are a sentence rather than a symbol. A conflict and a
+ * file that exists on one device only both need a word, because neither is
+ * something a person would guess from a coloured dot.
+ */
+.pill {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pill-conflict {
+  border-color: var(--danger);
+  color: var(--danger);
+}

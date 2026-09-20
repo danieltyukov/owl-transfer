@@ -1,0 +1,203 @@
+/*
+ * Design tokens. Every colour, size, radius and duration the app uses is
+ * declared here once; nothing downstream writes a literal.
+ *
+ * Theme handling has one rule that is easy to get wrong: no colour may have its
+ * only definition inside a media query. The full light palette is declared on
+ * bare `:root`, and each dark block redefines only what changes. A media query
+ * that is the sole home of a token leaves that token undefined for anyone whose
+ * system preference does not match, and the failure is invisible until someone
+ * with the other setting opens the app.
+ *
+ * The three dark paths, in cascade order:
+ *   1. `:root` carries light, always, for everyone.
+ *   2. System dark applies, unless the user explicitly chose light.
+ *   3. An explicit dark choice applies last, so it wins over system light.
+ *
+ * The two dark blocks must stay identical. `tokens.test.ts` asserts that, since
+ * drift between them is the standard way this pattern rots.
+ *
+ * The fonts are subsets, which the OFL treats as modifications, so they carry
+ * renamed families. See scripts/fetch-fonts.sh and the OFL.txt beside each file.
+ */
+
+@font-face {
+  font-family: 'Owl Sans';
+  src: url('./fonts/sans/owl-sans.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Owl Mono';
+  src: url('./fonts/mono/owl-mono.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /*
+   * Night and amber, which is where an owl lives: a cool near-black ink and a
+   * warm accent, the pair the eyes make against the dark. The ground is warm
+   * paper and the ink is cool, so the accent is the only hot thing on a light
+   * screen and the only light thing on a dark one.
+   *
+   * Green is spoken for by the synced state, which is why the accent is never
+   * in that hue family and never marks a file as up to date. Amber means in
+   * flight; green means done. Confusing the two is the one colour mistake this
+   * interface cannot afford.
+   */
+  --bg: #f8f7f4;
+  --surface: #ffffff;
+  /* Inset areas: the sidebar, a row's hover ground on a surface panel, the
+     track behind a progress ring. */
+  --surface-2: #f1efea;
+  --border: #e6e3dc;
+  --border-strong: #d3cfc6;
+  --text: #17181a;
+  /*
+   * Both greys are darker than the plan's, and the reason is `--surface-2`.
+   *
+   * The plan set `--faint` to #7c7e84 and `--muted` to #66686d, measured
+   * against the page and the panel. The sidebar is a third ground, and it is a
+   * ground text sits on: at the plan's value `--faint` read at 3.8:1 on the
+   * page and 4.3:1 on the sidebar, under the 4.5:1 that text has to clear.
+   * Being small and secondary is what makes contrast matter more, not less.
+   *
+   * `--faint` moved far enough to clear 4.5:1 on all three grounds, and
+   * `--muted` moved with it: a step of four values in each channel is not a
+   * step anyone can see, and two tokens that look the same are one token with
+   * a spare name. tokens.test.ts holds both against all three grounds.
+   */
+  --muted: #5e6065;
+  --faint: #6a6c71;
+  --accent: #a35f14;
+  --accent-hover: #8a4f0f;
+  --accent-tint: #f7ecdc;
+  --on-accent: #ffffff;
+  --success: #2f7a4a;
+  --danger: #b3372e;
+  --info: #2b5f9e;
+
+  /* Not a colour so much as a scrim: the text colour at a few percent. It adds
+     no hue, which is why it is allowed alongside a palette that is closed. */
+  --hover: rgba(23, 24, 26, 0.045);
+  --pressed: rgba(23, 24, 26, 0.08);
+
+  /* The two things that sit above the page rather than in it: the scrim behind
+     a dialog and the lift under a dialog or a menu. Nothing else in the
+     interface casts a shadow. */
+  --scrim: rgba(23, 24, 26, 0.4);
+  --shadow-pop: 0 10px 28px rgba(23, 24, 26, 0.18);
+
+  /*
+   * Two radii: 6px for controls, 10px for panels. A third radius is the first
+   * sign of a component pasted in from somewhere else.
+   */
+  --r-control: 6px;
+  --r-panel: 10px;
+
+  --dur-quick: 100ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease: cubic-bezier(0.165, 0.84, 0.44, 1);
+
+  --font-sans: 'Owl Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Owl Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 15px, not 16px. A dense list reads better a notch down, and every other
+     step is measured from it. */
+  --fs-micro: 11px;
+  --fs-mini: 12px;
+  --fs-small: 13px;
+  --fs-base: 15px;
+  --fs-large: 17px;
+  --fs-h2: 19px;
+  --fs-h1: 24px;
+  /* The pairing code, and nothing else. It is the one thing in the app a
+     person reads off one screen and checks against another across a room. */
+  --fs-code: 32px;
+  /* Tracking for grouped digits: the pairing code and the device id, where the
+     job is to be read aloud to someone holding the other device. */
+  --ls-micro: 0.07em;
+  --ls-h2: -0.025em;
+  --ls-h1: -0.03em;
+
+  --row-h: 40px;
+  --sidebar-w: 240px;
+
+  /* The title bar the desktop draws in place of the native one. 36px is the
+     height every frameless application settles on, and it is the one row in the
+     app that is chrome rather than content. */
+  --titlebar-h: 36px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #111214;
+    --surface: #191a1d;
+    --surface-2: #1f2024;
+    --border: #2a2b30;
+    --border-strong: #3a3b41;
+    --text: #e9e7e2;
+    --muted: #9a9ba1;
+    --faint: #86878e;
+    --accent: #e5a54a;
+    --accent-hover: #efb765;
+    --accent-tint: #2b2216;
+    --on-accent: #111214;
+    --success: #6fbf8a;
+    --danger: #e07068;
+    --info: #7fb0ea;
+    --hover: rgba(233, 231, 226, 0.06);
+    --pressed: rgba(233, 231, 226, 0.1);
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.5);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #111214;
+  --surface: #191a1d;
+  --surface-2: #1f2024;
+  --border: #2a2b30;
+  --border-strong: #3a3b41;
+  --text: #e9e7e2;
+  --muted: #9a9ba1;
+  --faint: #86878e;
+  --accent: #e5a54a;
+  --accent-hover: #efb765;
+  --accent-tint: #2b2216;
+  --on-accent: #111214;
+  --success: #6fbf8a;
+  --danger: #e07068;
+  --info: #7fb0ea;
+  --hover: rgba(233, 231, 226, 0.06);
+  --pressed: rgba(233, 231, 226, 0.1);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+
+/* A finger needs more than 40px. This is the one place row height changes. */
+@media (pointer: coarse) {
+  :root {
+    --row-h: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
