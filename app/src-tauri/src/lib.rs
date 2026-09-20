@@ -2,14 +2,19 @@
 //! the platform pieces the engine cannot provide for itself.
 //!
 //! The engine lives in `owl-core` and knows nothing about Tauri. This crate
-//! decides where its data goes, starts it, and forwards its state to the
-//! interface. The commands and that forwarding are Task D2; what is here is the
-//! shell those hang off: the window, the plugins, the settings file and the
-//! Android hooks.
+//! decides where its data goes, starts it, forwards its state to the interface
+//! and exposes one command per thing the interface can do. What is left is the
+//! part the engine cannot do for itself: the window, the plugins, the settings
+//! file and the Android hooks.
 
 #[cfg(target_os = "android")]
 mod android;
+mod commands;
+mod engine;
 mod settings;
+
+use owl_core::{Config, DeviceKind};
+use tauri::Manager;
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 const MAIN_WINDOW: &str = "main";
@@ -17,10 +22,6 @@ const MAIN_WINDOW: &str = "main";
 /// Brings the existing window back rather than opening another one.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn focus_main(app: &tauri::AppHandle) {
-    // Imported here rather than at the top of the file: Android has no window
-    // to focus, so on that target the import would be unused.
-    use tauri::Manager;
-
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
         let _ = window.unminimize();
@@ -97,11 +98,31 @@ pub fn run() {
     let builder = builder.plugin(android::init());
 
     builder
+        .invoke_handler(tauri::generate_handler![
+            commands::get_state,
+            commands::list_dir,
+            commands::import_paths,
+            commands::create_folder,
+            commands::delete_entry,
+            commands::rename_entry,
+            commands::open_entry,
+            commands::reveal_folder,
+            commands::set_folder,
+            commands::set_device_name,
+            commands::pair_with_nearby,
+            commands::pair_with_address,
+            commands::respond_to_pairing,
+            commands::forget_peer,
+            commands::all_files_permission,
+            commands::open_all_files_settings,
+            commands::set_paused,
+        ])
         .setup(|app| {
             let handle = app.handle();
             let data_dir = settings::data_dir(handle);
             let current = settings::Settings::load_or_create(handle, &data_dir);
             let (tcp_port, beacon_port) = settings::ports();
+            let paused = start_paused(handle);
 
             tracing::info!(
                 data_dir = %data_dir.display(),
@@ -109,14 +130,71 @@ pub fn run() {
                 device_name = %current.device_name,
                 tcp_port,
                 beacon_port,
+                paused,
                 "Owl Transfer starting"
             );
 
-            // Task D2 starts the engine here with this configuration and
-            // forwards its state snapshots to the webview.
+            let config = Config {
+                data_dir: data_dir.clone(),
+                folder: current.folder,
+                device_name: current.device_name,
+                kind: if cfg!(target_os = "android") {
+                    DeviceKind::Phone
+                } else {
+                    DeviceKind::Desktop
+                },
+                tcp_port,
+                beacon_port,
+                // Android's FUSE backed shared storage does not deliver inotify
+                // events for writes made by other applications, so the watcher
+                // needs a poll beside it there and nowhere else.
+                poll_watch: cfg!(target_os = "android"),
+                paused,
+            };
+
+            // Started before it is managed, because starting only needs to
+            // keep the channel the commands later wait on.
+            let engine_handle = engine::EngineHandle::new(data_dir);
+            engine::start(handle.clone(), &engine_handle, config);
+            app.manage(engine_handle);
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Owl Transfer");
+        .build(tauri::generate_context!())
+        .expect("error while building Owl Transfer")
+        .run(|app, event| {
+            // The index and the peer list are written here. Everything else the
+            // engine holds is already on disk, but an index that was never
+            // saved means the whole folder is rehashed at the next start.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(engine) = app.state::<engine::EngineHandle>().running() {
+                    tauri::async_runtime::block_on(engine.shutdown());
+                }
+            }
+        });
+}
+
+/// Whether the engine starts paused.
+///
+/// On Android the sync folder is in shared storage, which is out of reach until
+/// the person grants all files access on a system screen. Starting there
+/// unpaused would mean a scanner failing on every file and an error list the
+/// person can do nothing about, so it waits: the permission card calls
+/// `set_paused(false)` when the grant arrives.
+#[cfg(target_os = "android")]
+fn start_paused(app: &tauri::AppHandle) -> bool {
+    use android::OwlExt;
+
+    match app.owl().all_files_permission() {
+        Ok(state) => state != "granted",
+        Err(error) => {
+            tracing::warn!(%error, "could not read the storage permission, starting paused");
+            true
+        }
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn start_paused(_app: &tauri::AppHandle) -> bool {
+    false
 }

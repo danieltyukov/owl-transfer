@@ -154,5 +154,15 @@ export interface Backend {
   forgetPeer(id: string): Promise<void>;
   allFilesPermission(): Promise<Permission>;
   openAllFilesSettings(): Promise<void>;
+  /**
+   * Stops or restarts watching, scanning and syncing.
+   *
+   * Android starts paused, because the sync folder is in shared storage and is
+   * out of reach until all files access is granted. The permission card calls
+   * this with `false` the moment it sees the grant, which is the only caller:
+   * there is no pause control, because a folder that silently stops syncing is
+   * not a feature.
+   */
+  setPaused(paused: boolean): Promise<void>;
   openUrl(url: string): Promise<void>;
 }

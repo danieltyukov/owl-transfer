@@ -9,12 +9,6 @@
 //!
 //! The whole module is Android only. See `lib.rs` for where it is registered.
 
-// The two methods below are called from the `all_files_permission` and
-// `open_all_files_settings` commands, which are Task D2. Until those land
-// nothing in this crate calls them and dead_code is right about that. Remove
-// this when the commands arrive.
-#![allow(dead_code)]
-
 use serde::Deserialize;
 use tauri::{
     plugin::{Builder, PluginHandle, TauriPlugin},
@@ -29,6 +23,19 @@ struct PermissionResponse {
     state: String,
 }
 
+#[derive(Deserialize)]
+struct DisplayNameResponse {
+    /// Absent rather than null when there is no name: putting a null into a
+    /// JSONObject on the Kotlin side removes the key.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct UriArgs<'a> {
+    uri: &'a str,
+}
+
 pub struct Owl<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> Owl<R> {
@@ -38,6 +45,19 @@ impl<R: Runtime> Owl<R> {
     pub fn all_files_permission(&self) -> anyhow::Result<String> {
         let response: PermissionResponse = self.0.run_mobile_plugin("allFilesPermission", ())?;
         Ok(response.state)
+    }
+
+    /// The name the sending application published for a `content://` URI, if
+    /// it published one.
+    ///
+    /// The file picker hands the interface a URI and nothing else, and a URI
+    /// carries no name: the name lives in the content resolver, which only
+    /// Kotlin can ask. Without this every file picked on a phone would land
+    /// under a timestamp.
+    pub fn display_name(&self, uri: &str) -> anyhow::Result<Option<String>> {
+        let response: DisplayNameResponse =
+            self.0.run_mobile_plugin("displayName", UriArgs { uri })?;
+        Ok(response.name)
     }
 
     /// Opens the system screen that grants all files access. It returns as soon

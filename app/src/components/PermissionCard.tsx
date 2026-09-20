@@ -20,7 +20,12 @@ export function PermissionCard({ backend }: PermissionCardProps) {
 
   const check = useCallback(() => {
     void backend.allFilesPermission().then(
-      next => setPermission(next),
+      next => {
+        setPermission(next);
+        // The engine started paused because the folder was out of reach. This
+        // is the moment it stops being, and nothing else is watching for it.
+        if (next === 'granted') void backend.setPaused(false).catch(() => undefined);
+      },
       () => setPermission(null),
     );
   }, [backend]);

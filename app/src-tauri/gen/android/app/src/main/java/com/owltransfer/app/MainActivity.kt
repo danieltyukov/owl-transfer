@@ -161,7 +161,7 @@ private fun storageIsReachable(folder: File): Boolean {
  * into one temp file would give one corrupt file and no error.
  */
 private fun copyIntoFolder(resolver: ContentResolver, uri: Uri, folder: File) {
-  val name = displayName(resolver, uri)
+  val name = displayName(resolver, uri) ?: "shared-${System.currentTimeMillis()}"
   val target = freeName(folder, name)
   if (target == null) {
     Log.w(TAG, "too many files in $folder are already called $name")
@@ -210,8 +210,15 @@ private fun freeName(folder: File, name: String): File? {
   return null
 }
 
-/** The name the sending app gave the file, with any path separator dropped. */
-private fun displayName(resolver: ContentResolver, uri: Uri): String {
+/**
+ * The name the sending app gave the file, with any path separator dropped, or
+ * null when it gave none worth using.
+ *
+ * Internal rather than private because OwlPlugin answers the same question for
+ * a file picked in the app, and one lookup of OpenableColumns.DISPLAY_NAME is
+ * enough for the two of them.
+ */
+internal fun displayName(resolver: ContentResolver, uri: Uri): String? {
   try {
     resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
       val column = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
@@ -225,7 +232,7 @@ private fun displayName(resolver: ContentResolver, uri: Uri): String {
   } catch (e: SecurityException) {
     Log.w(TAG, "could not read the name of $uri", e)
   }
-  return "shared-${System.currentTimeMillis()}"
+  return null
 }
 
 /**

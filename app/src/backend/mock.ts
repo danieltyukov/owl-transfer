@@ -444,6 +444,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return Promise.resolve();
     },
 
+    setPaused(paused) {
+      state = { ...state, paused };
+      push();
+      return Promise.resolve();
+    },
+
     openUrl: () => Promise.resolve(),
   };
 
