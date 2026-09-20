@@ -51,7 +51,12 @@ happen. What it does is keep one folder the same between a couple of your own
 devices. Selective sync, version history, sharing with other people and
 relaying across the internet are all deliberately absent.
 
-<img src="docs/img/phone.webp" alt="The same folder on a phone: a header with the owl mark and a status pill, the file list with a sync badge beside every name, and tabs for Files, Devices and Settings along the bottom." width="300">
+On Android, sync runs while the app is open. Within about half a minute of the
+app going to the background Android suspends the connection, and the phone
+catches up the moment it is opened again. There is no foreground service in
+this release.
+
+<img src="docs/img/phone.webp" alt="The same folder on a phone: a header with the owl mark and the Owl Transfer wordmark beside buttons for adding files and making a folder, a file list with a green sync badge and a size beside every name, a status strip along the bottom reading Up to date, and tabs for Files, Devices and Settings under it." width="300">
 
 ## Install
 

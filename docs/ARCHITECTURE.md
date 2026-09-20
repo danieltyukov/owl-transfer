@@ -177,6 +177,14 @@ lexically smaller id survives. A paired peer's last known address is stored and
 retried every five seconds while it is disconnected, which is what lets a
 pair-by-address peer reconnect with no beacon at all.
 
+On Android the connection lives with the app. Android suspends the process
+within about half a minute of it going to the background, so the keepalive
+stops and the other side drops the link after its forty-five seconds of
+silence. Nothing is lost by that. The phone catches up the moment the app is
+opened again, on the first beacon or the five-second retry, and the poll
+watcher picks up whatever changed in the folder meanwhile. There is no
+foreground service in this release, and so no permanent notification either.
+
 ## The index
 
 Each device keeps one entry per path in the folder, including directories and
