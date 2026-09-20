@@ -618,6 +618,21 @@ async fn serve(
         });
         return;
     };
+    let failing = engine
+        .shared()
+        .fail_blocks
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+        .is_ok();
+    if failing {
+        let _ = conn
+            .send(Frame::Block {
+                req_id,
+                status: BLOCK_UNAVAILABLE,
+                data: bytes::Bytes::new(),
+            })
+            .await;
+        return;
+    }
     let settings = engine.settings();
     let served = {
         let inner = engine.lock().await;

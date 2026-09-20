@@ -240,17 +240,32 @@ impl Engine {
                 winner_remote: false,
             } => {
                 let local = local.expect("a conflict has a local entry");
-                let (winner, _) = resolve_conflict(
-                    &mut inner.index,
-                    &local,
-                    &remote,
-                    false,
-                    &me,
-                    &settings.device_name,
-                    now,
-                );
-                inner.recent_changes.insert(winner.path.clone(), now);
-                announce.push(winner);
+                if remote.deleted {
+                    // A deletion never destroys an edit: keep ours and bump
+                    // so the peer takes the file back.
+                    let (winner, _) = resolve_conflict(
+                        &mut inner.index,
+                        &local,
+                        &remote,
+                        false,
+                        &me,
+                        &settings.device_name,
+                        now,
+                    );
+                    inner.recent_changes.insert(winner.path.clone(), now);
+                    announce.push(winner);
+                } else {
+                    // Ours wins, and the losing side is the one to keep a
+                    // copy: the peer sees this same conflict from the other
+                    // end, moves its file aside, takes ours and announces the
+                    // merged winner. Announcing a dominating winner from here
+                    // would let the peer replace its file with no copy if its
+                    // own conflict download happened to fail once.
+                    debug!(
+                        "{} wins the conflict over {}; the peer keeps the copy",
+                        remote.path, peer_id
+                    );
+                }
             }
             Decision::Conflict {
                 winner_remote: true,
@@ -260,6 +275,9 @@ impl Engine {
                     self.dir_over_file(inner, settings, &local, &remote, now, announce)
                         .await;
                 } else {
+                    if local.as_ref().is_some_and(|l| l.is_live_file()) {
+                        inner.losing.insert(remote.path.clone());
+                    }
                     self.want_bytes(inner, peer_id, settings, remote, copies);
                 }
             }
@@ -318,6 +336,7 @@ impl Engine {
                 }
             }
             apply_adopt(&mut inner.index, &remote, now);
+            inner.losing.remove(&remote.path);
             inner.last_change_ms = Some(now);
         } else if remote.kind == EntryKind::Dir {
             let abs = match safe_abs(folder, &remote.path) {
@@ -561,7 +580,20 @@ impl Engine {
             }
         };
         let local = inner.index.get(&remote.path).cloned();
-        let decision = decide(local.as_ref(), &remote, me, peer_id);
+        let mut decision = decide(local.as_ref(), &remote, me, peer_id);
+        // A live file that lost a conflict is copied aside before any
+        // replacement, even one that arrives as a plain dominating entry
+        // (the peer's further edits, or its own resolution of the same
+        // conflict), so the losing edit is never silently gone.
+        if decision == Decision::Adopt
+            && inner.losing.contains(&remote.path)
+            && local.as_ref().is_some_and(|l| l.is_live_file())
+            && needs_bytes(local.as_ref(), &remote)
+        {
+            decision = Decision::Conflict {
+                winner_remote: true,
+            };
+        }
         let wants_bytes = matches!(
             decision,
             Decision::Adopt
@@ -590,6 +622,7 @@ impl Engine {
                     let _ = set_mtime_ms(&dest, remote.mtime_ms);
                 }
                 apply_adopt(&mut inner.index, &remote, now);
+                inner.losing.remove(&remote.path);
                 self.mark_index();
                 return Ok(());
             }
@@ -640,6 +673,7 @@ impl Engine {
                     inner.recent_changes.insert(loser.path.clone(), now);
                     announce.push(loser);
                 }
+                inner.losing.remove(&remote.path);
                 inner.recent_changes.insert(winner.path.clone(), now);
                 announce.push(winner);
             }

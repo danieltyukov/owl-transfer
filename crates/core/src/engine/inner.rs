@@ -123,6 +123,10 @@ pub(crate) struct Inner {
     pub dialing: HashSet<String>,
     /// Directory tombstones given one more chance to apply.
     pub tombstone_retries: HashSet<String>,
+    /// Paths whose live local file lost a conflict to a peer's version: a
+    /// copy of it is kept before anything replaces it, whichever entry
+    /// arrives first to do so.
+    pub losing: HashSet<String>,
     /// This machine's IPv4 addresses, refreshed by the housekeeping tick.
     pub addresses: Vec<String>,
     /// Addresses that may not ask to pair until the given time.
@@ -149,6 +153,7 @@ impl Inner {
             last_change_ms: None,
             dialing: HashSet::new(),
             tombstone_retries: HashSet::new(),
+            losing: HashSet::new(),
             addresses: crate::beacon::local_ipv4_addresses(),
             pairing_cooldown: HashMap::new(),
             unreadable: HashSet::new(),

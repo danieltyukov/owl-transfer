@@ -279,12 +279,10 @@ pub async fn download(
     let mut file = File::create(&tmp)
         .await
         .with_context(|| format!("creating {}", tmp.display()))?;
+    let tmp = TmpGuard::new(tmp);
     let peer = req.conn().peer_id.clone();
-    transfers
-        .lock()
-        .expect("transfers lock")
-        .begin_download(&peer, &entry.path, entry.size);
-    let result = download_blocks(
+    let _progress = DownloadGuard::begin(&transfers, &peer, &entry.path, entry.size);
+    let actual = download_blocks(
         &req,
         &entry.path,
         &hash,
@@ -293,34 +291,73 @@ pub async fn download(
         &transfers,
         &peer,
     )
-    .await;
-    transfers
-        .lock()
-        .expect("transfers lock")
-        .end_download(&peer, &entry.path);
-    let outcome = match result {
-        Ok(actual) => {
-            file.flush().await?;
-            drop(file);
-            if actual != hash {
-                Err(anyhow::anyhow!(
-                    "downloaded {} does not match the announced hash",
-                    entry.path
-                ))
-            } else {
-                Ok(())
-            }
+    .await?;
+    file.flush().await?;
+    drop(file);
+    if actual != hash {
+        bail!(
+            "downloaded {} does not match the announced hash",
+            entry.path
+        );
+    }
+    Ok(tmp.keep())
+}
+
+/// A download's progress entry, removed when the download ends however it
+/// ends: a future dropped at any await (a link taken down mid-transfer)
+/// cannot leave a phantom behind, and a `begin` that lands after the
+/// link's `end_all_for` is undone by the guard's drop.
+struct DownloadGuard {
+    transfers: SharedTransfers,
+    peer: String,
+    path: String,
+}
+
+impl DownloadGuard {
+    fn begin(transfers: &SharedTransfers, peer: &str, path: &str, total: u64) -> DownloadGuard {
+        transfers
+            .lock()
+            .expect("transfers lock")
+            .begin_download(peer, path, total);
+        DownloadGuard {
+            transfers: transfers.clone(),
+            peer: peer.to_string(),
+            path: path.to_string(),
         }
-        Err(e) => {
-            drop(file);
-            Err(e)
-        }
-    };
-    match outcome {
-        Ok(()) => Ok(tmp),
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            Err(e)
+    }
+}
+
+impl Drop for DownloadGuard {
+    fn drop(&mut self) {
+        self.transfers
+            .lock()
+            .expect("transfers lock")
+            .end_download(&self.peer, &self.path);
+    }
+}
+
+/// A temporary file that is deleted unless the caller keeps it, so an
+/// error or a dropped future leaves nothing behind.
+struct TmpGuard {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl TmpGuard {
+    fn new(path: PathBuf) -> TmpGuard {
+        TmpGuard { path, keep: false }
+    }
+
+    fn keep(mut self) -> PathBuf {
+        self.keep = true;
+        self.path.clone()
+    }
+}
+
+impl Drop for TmpGuard {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_file(&self.path);
         }
     }
 }
@@ -385,19 +422,16 @@ pub async fn local_copy(root: &Path, source_rel: &str, entry: &Entry) -> Result<
     if let Some(parent) = tmp.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    if let Err(e) = tokio::fs::copy(&source, &tmp).await {
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(e.into());
-    }
-    let hash = blake3_file(&tmp).await?;
+    let tmp = TmpGuard::new(tmp);
+    tokio::fs::copy(&source, &tmp.path).await?;
+    let hash = blake3_file(&tmp.path).await?;
     if Some(hash) != entry.hash {
-        let _ = tokio::fs::remove_file(&tmp).await;
         return Ok(None);
     }
     // Some platforms' copies keep the source's mtime; a fresh one keeps
     // the file out of the stale sweep while it waits to be installed.
-    let _ = crate::clock::set_mtime_ms(&tmp, crate::clock::now_ms());
-    Ok(Some(tmp))
+    let _ = crate::clock::set_mtime_ms(&tmp.path, crate::clock::now_ms());
+    Ok(Some(tmp.keep()))
 }
 
 /// What the index says about a file we may serve.
@@ -475,6 +509,27 @@ mod tests {
             vv: BTreeMap::new(),
             seen_at_ms: 0,
         }
+    }
+
+    #[test]
+    fn guards_clean_up_unless_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let dropped = dir.path().join(".owl-tmp-a");
+        let kept = dir.path().join(".owl-tmp-b");
+        std::fs::write(&dropped, b"x").unwrap();
+        std::fs::write(&kept, b"x").unwrap();
+        drop(TmpGuard::new(dropped.clone()));
+        assert!(!dropped.exists());
+        let path = TmpGuard::new(kept.clone()).keep();
+        assert_eq!(path, kept);
+        assert!(kept.exists());
+
+        let transfers: SharedTransfers = Arc::new(Mutex::new(TransferState::default()));
+        {
+            let _guard = DownloadGuard::begin(&transfers, "peer", "a.bin", 10);
+            assert_eq!(transfers.lock().unwrap().summary(0).active.len(), 1);
+        }
+        assert!(transfers.lock().unwrap().summary(0).active.is_empty());
     }
 
     #[test]

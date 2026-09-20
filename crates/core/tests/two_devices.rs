@@ -1093,6 +1093,18 @@ async fn paused_start_touches_nothing_and_syncs_after_resume() {
     assert!(blocked.is_file(), "nothing under the folder was touched");
     assert_eq!(std::fs::read(&blocked).unwrap(), b"in the way");
 
+    // A resume that cannot create its folder is reported, not fatal, and
+    // leaves the engine paused so it can be tried again.
+    alpha.set_paused(false).await;
+    let state = alpha.state();
+    assert!(state.paused, "{:?}", state.errors);
+    assert!(state
+        .errors
+        .iter()
+        .any(|e| e.contains("cannot resume syncing")));
+    assert!(blocked.is_file());
+    assert_eq!(std::fs::read(&blocked).unwrap(), b"in the way");
+
     // Point the folder somewhere valid and resume: the folder is created,
     // watched and scanned, and sync proceeds both ways.
     let real = tempfile::tempdir().unwrap();
@@ -1120,16 +1132,180 @@ async fn paused_start_touches_nothing_and_syncs_after_resume() {
     std::fs::write(folder.join("back.txt"), b"from alpha").unwrap();
     assert!(wait_for_bytes(&b, "back.txt", b"from alpha", WAIT).await);
 
-    // A resume that cannot create its folder is reported, not fatal, and
-    // leaves the engine paused so it can be tried again.
-    alpha.set_paused(true).await;
-    alpha.set_folder(blocked.clone()).await.unwrap_err();
-    alpha.set_paused(false).await;
-    assert!(!alpha.state().paused, "the folder is still the valid one");
-    assert!(blocked.is_file());
-
     alpha.shutdown().await;
     b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn losing_edit_survives_a_failed_conflict_download() {
+    let a = start("Alpha").await;
+    let mut b = start("Beta").await;
+    pair(&a, &b).await;
+
+    a.write("doc.txt", b"base");
+    assert!(wait_for_bytes(&b, "doc.txt", b"base", WAIT).await);
+    b.engine.shutdown().await;
+    assert!(wait_until(|| !connected_to(&a.engine, &b.id()), WAIT).await);
+
+    // Both edit while apart; beta's edit is newer and wins the name, so
+    // alpha is the losing side and must keep the copy of its edit.
+    a.write("doc.txt", b"alpha edit");
+    assert!(wait_until(|| a.engine.state().summary.bytes == 10, WAIT).await);
+    b.write("doc.txt", b"beta edit, newer");
+    let newer = mtime_ms(&a.path("doc.txt")) + 5000;
+    owl_core::clock::set_mtime_ms(&b.path("doc.txt"), newer).unwrap();
+
+    // Alpha's first block request for beta's version fails once. Before
+    // the losing side owned the copy, beta announced its merged winner at
+    // once, alpha adopted it as a plain replacement while its own
+    // conflict download waited for the retry, and the retry then found
+    // itself dominated: alpha's edit was gone on both sides.
+    b.restart().await;
+    b.engine.fail_next_blocks_for_tests(1);
+    assert!(
+        wait_until(
+            || connected_to(&a.engine, &b.id()) && connected_to(&b.engine, &a.id()),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+
+    let settled = |d: &Device| {
+        let files = d.files();
+        files.len() == 2
+            && d.read("doc.txt").as_deref() == Some(b"beta edit, newer".as_slice())
+            && files.iter().any(|f| {
+                f.starts_with("doc (conflict from Alpha ")
+                    && d.read(f).as_deref() == Some(b"alpha edit".as_slice())
+            })
+    };
+    assert!(
+        wait_until(|| settled(&a) && settled(&b), RECONNECT_WAIT).await,
+        "alpha: {:?}, beta: {:?}",
+        a.files(),
+        b.files()
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(settled(&a) && settled(&b));
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn paused_switch_then_resume_uses_the_floor() {
+    let a = start("Alpha").await;
+    let b = start("Beta").await;
+    pair(&a, &b).await;
+
+    // Shared history: both hold doc.txt as {beta: 1, alpha: 2}.
+    b.write("doc.txt", b"beta original");
+    assert!(wait_for_bytes(&a, "doc.txt", b"beta original", WAIT).await);
+    a.write("doc.txt", b"alpha edit");
+    assert!(wait_for_bytes(&b, "doc.txt", b"alpha edit", WAIT).await);
+
+    // Beta pauses, switches to a folder holding a different doc.txt, and
+    // resumes. The floor set by the switch is stored with the index, so
+    // the resume scan's entry is concurrent with alpha's rather than
+    // dominated by it.
+    b.engine.set_paused(true).await;
+    let new_folder = tempfile::tempdir().unwrap();
+    std::fs::write(new_folder.path().join("doc.txt"), b"beta new folder").unwrap();
+    let newer = mtime_ms(&a.path("doc.txt")) + 5000;
+    owl_core::clock::set_mtime_ms(&new_folder.path().join("doc.txt"), newer).unwrap();
+    b.engine
+        .set_folder(new_folder.path().to_path_buf())
+        .await
+        .unwrap();
+    assert!(b.engine.state().paused);
+    b.engine.set_paused(false).await;
+    assert!(!b.engine.state().paused, "{:?}", b.engine.state().errors);
+    assert!(
+        wait_until(
+            || connected_to(&a.engine, &b.id()) && connected_to(&b.engine, &a.id()),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+
+    let read = |dir: &Path, name: &str| std::fs::read(dir.join(name)).ok();
+    let names = |dir: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| !n.starts_with(".owl-tmp-"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    let settled = |dir: &Path| {
+        let names = names(dir);
+        names.len() == 2
+            && read(dir, "doc.txt").as_deref() == Some(b"beta new folder".as_slice())
+            && names.iter().any(|f| {
+                f.starts_with("doc (conflict from Alpha ")
+                    && read(dir, f).as_deref() == Some(b"alpha edit".as_slice())
+            })
+    };
+    assert!(
+        wait_until(
+            || settled(a.folder.path()) && settled(new_folder.path()),
+            RECONNECT_WAIT
+        )
+        .await,
+        "alpha: {:?}, beta: {:?}",
+        names(a.folder.path()),
+        names(new_folder.path())
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(settled(a.folder.path()) && settled(new_folder.path()));
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pause_that_overtakes_a_resume_wins() {
+    init_logging();
+    let data = tempfile::tempdir().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("a.txt"), b"already here").unwrap();
+    let mut cfg = config(data.path(), folder.path(), "Alpha", 0);
+    cfg.paused = true;
+    let alpha = Engine::start(cfg).await.unwrap();
+    assert_eq!(alpha.state().summary.files, 0);
+
+    // The resume's first scan pauses before hashing; a pause lands then.
+    alpha.set_scan_hash_delay_for_tests(Duration::from_secs(2));
+    let resuming = {
+        let engine = alpha.clone();
+        tokio::spawn(async move { engine.set_paused(false).await })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    alpha.set_paused(true).await;
+    resuming.await.unwrap();
+    assert!(alpha.state().paused, "the pause wins");
+    assert_eq!(
+        alpha.state().summary.files,
+        0,
+        "the scan stopped before touching the index"
+    );
+    std::fs::write(folder.path().join("b.txt"), b"written while paused").unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(alpha.state().summary.files, 0);
+
+    // The next resume starts clean and indexes both files.
+    alpha.set_scan_hash_delay_for_tests(Duration::ZERO);
+    alpha.set_paused(false).await;
+    assert!(!alpha.state().paused);
+    assert!(wait_until(|| alpha.state().summary.files == 2, WAIT).await);
+    std::fs::write(folder.path().join("c.txt"), b"watched").unwrap();
+    assert!(wait_until(|| alpha.state().summary.files == 3, WAIT).await);
+
+    alpha.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
