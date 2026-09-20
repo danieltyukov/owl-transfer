@@ -79,9 +79,11 @@ characters). The device also has a display name
 Every connection is TLS 1.3 (`rustls` with the `ring` backend, pure Rust so
 it cross-compiles to Android without a C toolchain beyond the NDK). Both sides
 present their certificate. A custom verifier accepts a certificate only if its
-fingerprint belongs to a paired peer, or if the connection is a pairing
-attempt, in which case the handshake completes and the application layer runs
-the pairing exchange below before anything else is allowed.
+fingerprint belongs to a paired peer. Any other certificate also completes
+the handshake, because a pairing attempt has to, but the connection is then
+allowed exactly one thing: the pairing exchange below. Nothing else is
+accepted from it until pairing succeeds, and a stored peer's frames are
+dropped the moment it is forgotten.
 
 ### Discovery
 
@@ -105,18 +107,30 @@ Numeric comparison, like Bluetooth, because the person pairing holds both
 devices:
 
 1. Device B (from the nearby list, or from a typed address) connects to A over
-   TLS and sends `PairRequest {id, name, kind}`.
-2. Both compute a six-digit code from the two certificate fingerprints and a
-   nonce A sends back: `code = HMAC-SHA256(nonce, fpA || fpB) mod 10^6`.
-3. A shows "B wants to pair. Code 482 913. Accept?". B shows "Pairing with A.
+   TLS. B picks a random 16-byte nonce and sends
+   `PairRequest {id, name, kind, commit}` where `commit` is the SHA-256 of its
+   nonce. A checks that the certificate B presented matches the id the user
+   chose.
+2. A picks its own 16-byte nonce and answers `PairChallenge {nonce}`. B then
+   sends `PairReveal {nonce}`; A checks that its hash equals the commitment
+   and drops the connection if it does not.
+3. Both compute a six-digit code from the two nonces and the two certificate
+   fingerprints: `code = HMAC-SHA256(key = nonce_A || nonce_B,
+   msg = fp_A || fp_B) mod 10^6`. Committing before revealing is what stops a
+   relay on the LAN from grinding its own nonce until the two screens agree;
+   each side's nonce is fixed before it learns the other's.
+4. A shows "B wants to pair. Code 482 913. Accept?". B shows "Pairing with A.
    Code 482 913. Waiting". The user checks the codes match and accepts on A.
-4. A sends `PairAccept`; both store the other's fingerprint, name and kind in
+5. A sends `PairAccept`; both store the other's fingerprint, name and kind in
    `peers.json`. The connection is now a normal peer connection and sync
    starts on it.
 
 A rejected or timed-out request (60 s) closes the connection. Forgetting a
-peer removes it from `peers.json`; the next connection from it is refused at
-the TLS layer.
+peer removes it from `peers.json`. The next connection from it completes the
+TLS handshake, is answered with `PairReject {reason: "not paired"}` and
+closed; a device that receives that reject from a peer it still lists
+forgets it too and reports why, so a one-sided forget does not leave the
+other side redialling.
 
 ### Connections
 
