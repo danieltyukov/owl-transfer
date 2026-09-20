@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  What the FileProvider in AndroidManifest.xml is allowed to hand out.
+
+  OwlPlugin.openPath turns a file in the sync folder into a content URI so that
+  another application can open it; the sync folder is under shared storage, so
+  external-path is the entry that covers it. Nothing is handed out without an
+  explicit intent naming that one file.
+-->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-  <external-path name="my_images" path="." />
-  <cache-path name="my_cache_images" path="." />
+  <external-path name="shared" path="." />
+  <cache-path name="cache" path="." />
 </paths>

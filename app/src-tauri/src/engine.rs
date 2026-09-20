@@ -30,6 +30,13 @@ use tokio::sync::{watch, Mutex};
 /// front of the webview.
 const STATE_INTERVAL: Duration = Duration::from_millis(100);
 
+/// How long the way out waits for a start that has not finished.
+///
+/// An index that was never saved means the whole folder is read and hashed
+/// again at the next start, which is worth a few seconds at the door. Not
+/// longer than that: a window that will not close is worse than a rescan.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
+
 /// The engine, once it has started, or why it did not.
 #[derive(Clone)]
 enum Startup {
@@ -135,12 +142,19 @@ impl EngineHandle {
         attempt(self.app.clone(), self.started.clone(), config).await
     }
 
-    /// The engine if it has already started, without waiting for one that has
-    /// not. Used on the way out, where there is nothing left to wait for.
-    pub fn running(&self) -> Option<Engine> {
-        match self.started.borrow().as_ref() {
-            Some(Startup::Running(engine)) => Some(engine.clone()),
-            _ => None,
+    /// Stops the engine and writes the index and the peer list.
+    ///
+    /// It waits a little for a start that is still in flight, because closing
+    /// the window a second after opening it is a thing people do and the engine
+    /// has an index to write by then.
+    pub async fn shutdown(&self) {
+        match tokio::time::timeout(SHUTDOWN_WAIT, self.engine()).await {
+            Ok(Ok(engine)) => engine.shutdown().await,
+            // It never started, so it has nothing to write.
+            Ok(Err(_)) => {}
+            Err(_) => tracing::warn!(
+                "the engine was still starting at exit, so the index was not written"
+            ),
         }
     }
 
@@ -158,6 +172,44 @@ impl EngineHandle {
     }
 }
 
+/// Answers the commands waiting on a start that never finished.
+///
+/// Every command awaits a watch channel whose sender lives as long as the app,
+/// so it never closes on its own: a start task that panics or is aborted before
+/// it records anything would leave them all waiting forever. This is armed for
+/// the length of the attempt and disarmed once a result is in.
+///
+/// It only runs where a panic unwinds. The release profile is `panic = "abort"`,
+/// which takes the process down instead, and a process that is gone is not a
+/// process anyone is waiting on.
+struct Unanswered {
+    started: watch::Sender<Option<Startup>>,
+    blank: Option<State>,
+}
+
+impl Unanswered {
+    fn answered(&mut self) {
+        self.blank = None;
+    }
+}
+
+impl Drop for Unanswered {
+    fn drop(&mut self) {
+        let Some(blank) = self.blank.take() else {
+            return;
+        };
+        let message = "the engine start did not finish".to_string();
+        tracing::error!(%message);
+        let state = State {
+            paused: true,
+            errors: vec![format!("Owl Transfer could not start: {message}")],
+            ..blank
+        };
+        self.started
+            .send_replace(Some(Startup::Failed(Arc::new(Failure { message, state }))));
+    }
+}
+
 /// One attempt at starting, recording how it went either way.
 async fn attempt(
     app: AppHandle,
@@ -167,6 +219,10 @@ async fn attempt(
     // Built before the config moves, so a failure has a folder and a device
     // name to show rather than blanks.
     let blank = blank_state(&config);
+    let mut guard = Unanswered {
+        started: started.clone(),
+        blank: Some(blank.clone()),
+    };
 
     match Engine::start(config).await {
         Ok(engine) => {
@@ -179,6 +235,7 @@ async fn attempt(
             // has asked it anything. Every command after that would then wait
             // for a result that had already been dropped.
             started.send_replace(Some(Startup::Running(engine)));
+            guard.answered();
             Ok(())
         }
         Err(error) => {
@@ -195,6 +252,7 @@ async fn attempt(
                 message: message.clone(),
                 state: state.clone(),
             }))));
+            guard.answered();
             if let Err(error) = app.emit("state", &state) {
                 tracing::error!(%error, "could not tell the interface why");
             }

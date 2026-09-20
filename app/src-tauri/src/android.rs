@@ -1,4 +1,4 @@
-//! The `owl` mobile plugin: the two questions only Kotlin can answer.
+//! The `owl` mobile plugin: the things only Kotlin can answer or do.
 //!
 //! The sync folder is `/storage/emulated/0/OwlTransfer`, in shared storage, so
 //! that every file manager and gallery on the phone can see what was synced.
@@ -36,6 +36,16 @@ struct UriArgs<'a> {
     uri: &'a str,
 }
 
+#[derive(serde::Serialize)]
+struct PathArgs<'a> {
+    path: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct ThemeArgs {
+    dark: bool,
+}
+
 pub struct Owl<R: Runtime>(PluginHandle<R>);
 
 impl<R: Runtime> Owl<R> {
@@ -58,6 +68,31 @@ impl<R: Runtime> Owl<R> {
         let response: DisplayNameResponse =
             self.0.run_mobile_plugin("displayName", UriArgs { uri })?;
         Ok(response.name)
+    }
+
+    /// Opens a file in the sync folder with whatever application handles it.
+    ///
+    /// The opener plugin cannot: its Android side reads the string it is given
+    /// as a URI, and an absolute path has no scheme, while a `file://` one
+    /// throws `FileUriExposedException`. Kotlin turns the path into a
+    /// `FileProvider` content URI, which is a thing another application is
+    /// allowed to read, and starts a chooser on it.
+    pub fn open_path(&self, path: &str) -> anyhow::Result<()> {
+        let _: serde_json::Value = self.0.run_mobile_plugin("openPath", PathArgs { path })?;
+        Ok(())
+    }
+
+    /// Sets the window background to the colour the page is drawn on.
+    ///
+    /// The web layer is padded in by the system bar insets, so what is left
+    /// behind the status bar and the gesture handle is the window background.
+    /// Only the page knows which theme is in force, because the person can
+    /// choose one that is not the system's.
+    pub fn set_window_theme(&self, dark: bool) -> anyhow::Result<()> {
+        let _: serde_json::Value = self
+            .0
+            .run_mobile_plugin("setWindowTheme", ThemeArgs { dark })?;
+        Ok(())
     }
 
     /// Opens the system screen that grants all files access. It returns as soon

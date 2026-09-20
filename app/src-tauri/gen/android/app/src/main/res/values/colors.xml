@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The one colour Android draws for itself.
+  The colours Android draws for itself.
 
   The activity is laid out edge to edge and the web layer is padded in by the
   system bar insets, so the strips behind the status bar and the gesture handle
-  are the window background rather than anything the interface paints. This is
-  the interface's own paper colour from app/src/tokens.css, so the seam does not
-  show. values-night carries the dark theme's ground.
+  are the window background rather than anything the interface paints. These are
+  the interface's own paper and ground from app/src/tokens.css, so the seam does
+  not show.
+
+  owl_ground is the one the theme uses, and it follows the system's dark mode
+  through values-night. That is the right guess before the page has painted; the
+  page then says which theme the person actually chose and OwlPlugin repaints
+  the window from the two named colours below.
 -->
 <resources>
-    <color name="owl_ground">#F8F7F4</color>
+    <color name="owl_ground_light">#F8F7F4</color>
+    <color name="owl_ground_dark">#111214</color>
+    <color name="owl_ground">@color/owl_ground_light</color>
 </resources>

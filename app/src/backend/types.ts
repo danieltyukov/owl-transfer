@@ -137,6 +137,16 @@ export interface Backend {
   onState(cb: (s: State) => void): Unsubscribe;
   onDirChanged(cb: (path: string) => void): Unsubscribe;
   onDrop(cb: (paths: string[]) => void): Unsubscribe;
+  /**
+   * Whether something draggable is over the window.
+   *
+   * The interface cannot answer this for itself where there is a shell. A
+   * desktop window has the drag intercepted before the web layer sees it, so
+   * that the paths can be read off it, and `dragenter` never fires. A browser
+   * has no shell to intercept anything and keeps its own events, so there this
+   * never fires and the zone lights up from those instead.
+   */
+  onDragOver(cb: (over: boolean) => void): Unsubscribe;
   listDir(path: string): Promise<DirEntry[]>;
   pickAndImport(into: string): Promise<number>;
   importPaths(paths: string[], into: string): Promise<number>;

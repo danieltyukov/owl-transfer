@@ -194,7 +194,7 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
       </div>
 
       <div className="pane-body">
-        <DropZone label={here}>
+        <DropZone backend={backend} label={here}>
           {entries === null ? null : listing.length === 0 ? (
             <EmptyState
               root={dir === ''}

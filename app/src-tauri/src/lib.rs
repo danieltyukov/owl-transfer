@@ -117,6 +117,7 @@ pub fn run() {
             commands::all_files_permission,
             commands::open_all_files_settings,
             commands::set_paused,
+            commands::set_window_theme,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -166,9 +167,8 @@ pub fn run() {
             // engine holds is already on disk, but an index that was never
             // saved means the whole folder is rehashed at the next start.
             if matches!(event, tauri::RunEvent::Exit) {
-                if let Some(engine) = app.state::<engine::EngineHandle>().running() {
-                    tauri::async_runtime::block_on(engine.shutdown());
-                }
+                let handle = app.state::<engine::EngineHandle>();
+                tauri::async_runtime::block_on(handle.shutdown());
             }
         });
 }

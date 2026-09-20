@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -177,6 +177,26 @@ describe('the files pane', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(opener).toHaveFocus();
+  });
+
+  it('lights the drop zone from the shell, which is the only place a window hears it', async () => {
+    // A desktop window never gets `dragenter`: the shell takes the drag off the
+    // web layer to read the paths out of it. Without this the highlight and the
+    // hint are dead in the one place they were drawn for.
+    const mock = createMockBackend();
+    const { container } = render(<App backend={mock} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    const zone = container.querySelector('.dropzone')!;
+    expect(zone).not.toHaveAttribute('data-over');
+
+    act(() => mock.emitDragOver(true));
+    expect(zone).toHaveAttribute('data-over');
+
+    // A drop ends the hover as surely as a leave does, and the adapter reports
+    // both as false.
+    act(() => mock.emitDragOver(false));
+    expect(zone).not.toHaveAttribute('data-over');
   });
 
   it('walks a dropped path into the folder that is open', async () => {

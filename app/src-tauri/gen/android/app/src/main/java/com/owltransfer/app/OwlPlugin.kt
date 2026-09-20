@@ -3,21 +3,38 @@ package com.owltransfer.app
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Environment
 import android.provider.Settings
 import android.util.Log
+import android.webkit.MimeTypeMap
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import java.io.File
 
 /** The one argument `displayName` takes: the content URI to look up. */
 @InvokeArg
 class UriArgs {
   lateinit var uri: String
+}
+
+/** The one argument `openPath` takes: the absolute path of the file to open. */
+@InvokeArg
+class PathArgs {
+  lateinit var path: String
+}
+
+/** The one argument `setWindowTheme` takes: whether the page is dark. */
+@InvokeArg
+class ThemeArgs {
+  var dark: Boolean = false
 }
 
 /**
@@ -33,6 +50,10 @@ class UriArgs {
  * The third is the name of a picked file. The file picker hands the interface a
  * content:// URI, which carries no name; the name is a column in the content
  * resolver, which is Kotlin's to read.
+ *
+ * The fourth is opening a file, which needs a content URI of our own making,
+ * and the fifth is the window background, which is the only part of the screen
+ * the web layer does not paint.
  *
  * The Rust half is app/src-tauri/src/android.rs.
  */
@@ -63,6 +84,75 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
   }
 
   /**
+   * Opens a file in the sync folder with whatever application handles it.
+   *
+   * Another application cannot read /storage/emulated/0/OwlTransfer/... by
+   * path, and handing it a file:// URI throws FileUriExposedException, so the
+   * file goes out as a FileProvider content URI with read permission granted
+   * for the life of the intent. The provider and the paths it may serve are in
+   * AndroidManifest.xml and res/xml/file_paths.xml.
+   *
+   * A chooser rather than a bare ACTION_VIEW: a person opening a file from a
+   * sync folder often wants a particular application rather than whichever one
+   * claimed the type first.
+   */
+  @Command
+  fun openPath(invoke: Invoke) {
+    val args = invoke.parseArgs(PathArgs::class.java)
+    val file = File(args.path)
+
+    val uri = try {
+      FileProvider.getUriForFile(activity, "${activity.packageName}.fileprovider", file)
+    } catch (e: IllegalArgumentException) {
+      // The path is outside every <paths> entry the provider declares, which
+      // means the sync folder has been moved somewhere it cannot serve.
+      Log.w(TAG, "cannot share $file through the file provider", e)
+      invoke.reject("that file is somewhere Owl Transfer cannot share from")
+      return
+    }
+
+    val view = Intent(Intent.ACTION_VIEW).apply {
+      setDataAndType(uri, mimeTypeOf(file.name))
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    // The flag has to be on the chooser as well: it is the intent the system
+    // actually starts, and the grant travels with it.
+    val chooser = Intent.createChooser(view, null).apply {
+      addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    try {
+      activity.startActivity(chooser)
+    } catch (e: ActivityNotFoundException) {
+      Log.w(TAG, "nothing on this phone opens ${file.name}", e)
+      invoke.reject("nothing on this phone opens that kind of file")
+      return
+    }
+    invoke.resolve(JSObject())
+  }
+
+  /**
+   * Paints the window background the colour the page is drawn on.
+   *
+   * The web layer is padded in by the system bar insets, so the strips behind
+   * the status bar and the gesture handle are this. The theme resource follows
+   * the system's dark mode, which is the right guess before the page has
+   * painted and the wrong one afterwards for anyone who chose otherwise.
+   */
+  @Command
+  fun setWindowTheme(invoke: Invoke) {
+    val args = invoke.parseArgs(ThemeArgs::class.java)
+    val colour = ContextCompat.getColor(
+      activity,
+      if (args.dark) R.color.owl_ground_dark else R.color.owl_ground_light,
+    )
+    activity.runOnUiThread {
+      activity.window.setBackgroundDrawable(ColorDrawable(colour))
+    }
+    invoke.resolve(JSObject())
+  }
+
+  /**
    * Opens the system screen that grants all files access.
    *
    * It returns as soon as the screen has been asked for, not when the person
@@ -90,7 +180,22 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve(JSObject())
   }
 
+  /**
+   * What kind of file this is, as far as the extension says.
+   *
+   * MimeTypeMap wants a lowercase extension and nothing else; a name with a
+   * space in it defeats getFileExtensionFromUrl, so the extension is taken
+   * here. Anything unrecognised goes out as star slash star, which makes the
+   * chooser offer everything rather than nothing.
+   */
+  private fun mimeTypeOf(name: String): String {
+    val extension = name.substringAfterLast('.', "").lowercase()
+    if (extension.isEmpty()) return ANY_TYPE
+    return MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: ANY_TYPE
+  }
+
   private companion object {
     const val TAG = "owl-transfer"
+    const val ANY_TYPE = "*/*"
   }
 }

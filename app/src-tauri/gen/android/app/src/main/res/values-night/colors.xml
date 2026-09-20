@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The dark theme's ground, from app/src/tokens.css. See values/colors.xml. -->
+<!-- The dark theme's ground before the page has said which it wants. See
+     values/colors.xml. -->
 <resources>
-    <color name="owl_ground">#111214</color>
+    <color name="owl_ground">@color/owl_ground_dark</color>
 </resources>

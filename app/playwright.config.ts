@@ -8,8 +8,8 @@ import { defineConfig, devices } from '@playwright/test';
  * query means nothing to it. This builds the app, serves it, and looks.
  *
  * The app runs on the mock backend here, the same way it does in a browser
- * during development: nothing sets `window.__owlBackend`, so `resolveBackend`
- * hands back the mock.
+ * during development: `__TAURI_INTERNALS__` is not on the window, so `main.tsx`
+ * never imports the adapter and `resolveBackend` hands back the mock.
  */
 export default defineConfig({
   testDir: './e2e',

@@ -95,6 +95,8 @@ export interface MockBackend extends Backend {
   emitState(patch: Partial<State>): void;
   emitDirChanged(path: string): void;
   emitDrop(paths: string[]): void;
+  /** Drag something over the window, or take it away again. */
+  emitDragOver(over: boolean): void;
   readonly state: State;
   readonly entries: ReadonlyMap<string, DirEntry>;
 }
@@ -213,6 +215,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const stateListeners = new Set<(s: State) => void>();
   const dirListeners = new Set<(path: string) => void>();
   const dropListeners = new Set<(paths: string[]) => void>();
+  const dragListeners = new Set<(over: boolean) => void>();
 
   const push = (): void => {
     for (const cb of [...stateListeners]) cb(state);
@@ -294,6 +297,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     emitDrop(paths) {
       for (const cb of [...dropListeners]) cb(paths);
     },
+    emitDragOver(over) {
+      for (const cb of [...dragListeners]) cb(over);
+    },
 
     getState: () => Promise.resolve(state),
 
@@ -313,6 +319,15 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       dropListeners.add(cb);
       return () => {
         dropListeners.delete(cb);
+      };
+    },
+    // Nothing calls these on its own. A browser has no shell intercepting the
+    // drag, so the drop zone lights up from its own `dragenter`; this exists so
+    // that a test can stand in for the shell that would.
+    onDragOver(cb): Unsubscribe {
+      dragListeners.add(cb);
+      return () => {
+        dragListeners.delete(cb);
       };
     },
 

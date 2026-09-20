@@ -36,9 +36,16 @@ if ('__TAURI_INTERNALS__' in window) {
   void import('./backend/tauri.js')
     .then(module => module.createTauriBackend())
     .then(render, error => {
-      // Falling back to the mock here would put a fictional folder in front of
-      // someone whose real one is right there on disk.
+      // Not the mock: that would put a fictional folder in front of someone
+      // whose real one is right there on disk. A sentence instead, because a
+      // window that comes up empty and says nothing is the worst of the three.
       console.error('the shell could not be reached', error);
+      root.render(
+        <p role="alert" className="startup-error">
+          Owl Transfer could not reach its own engine. Closing this window and
+          opening it again is the thing to try.
+        </p>,
+      );
     });
 } else {
   render(resolveBackend());

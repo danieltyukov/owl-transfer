@@ -120,6 +120,27 @@ time,
   color: var(--text);
 }
 
+/*
+ * The whole window when there is nothing else to draw.
+ *
+ * `main.tsx` renders this when the shell cannot be reached, which is the only
+ * case where the app has no engine and no mock to fall back on. It sits in
+ * `base.css` rather than beside a component because at that point nothing else
+ * has loaded.
+ */
+.startup-error {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+  font-size: var(--fs-large);
+  line-height: 1.5;
+  max-width: 34ch;
+  margin-inline: auto;
+  color: var(--muted);
+}
+
 /* Reachable by keyboard, invisible until it has focus. */
 .visually-hidden {
   position: absolute;

@@ -4,7 +4,7 @@
 //! `anyhow::Error` into the string the interface shows. Nothing here decides
 //! anything: the rules live in the engine, and what is left over is the part
 //! that is a property of the platform rather than of syncing, which is why
-//! `reveal_folder` and the two permission commands have two bodies.
+//! `open_entry`, `reveal_folder` and the permission commands have two bodies.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,6 +23,22 @@ type Answer<T> = Result<T, String>;
 /// creating /home/you/OwlTransfer: permission denied") arrives with it.
 fn failed(error: anyhow::Error) -> String {
     format!("{error:#}")
+}
+
+/// Runs something that blocks the thread it is on, off the async runtime.
+///
+/// The calls that need this are the ones that leave Rust: a mobile plugin call
+/// is a round trip through JNI that waits on the Android UI thread, and the
+/// desktop opener hands over to the system file manager. Holding a runtime
+/// worker while either happens is how a phone with one core stops answering.
+async fn blocking<T, F>(work: F) -> Answer<T>
+where
+    F: FnOnce() -> Answer<T> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("the call did not finish: {error}"))?
 }
 
 /// Which shell this is: "android" or "desktop".
@@ -68,39 +84,42 @@ pub async fn import_paths(
 ) -> Answer<u32> {
     let engine = handle.engine().await?;
     let mut on_disk: Vec<PathBuf> = Vec::new();
-    let mut streamed = 0u32;
+    let mut streams: Vec<(FilePath, Option<String>)> = Vec::new();
 
     for (index, picked) in paths.into_iter().enumerate() {
-        let url = match picked {
-            FilePath::Path(path) => {
-                on_disk.push(path);
-                continue;
-            }
-            FilePath::Url(url) => url,
-        };
-        // A file:// URL is a path this process can open like any other, and the
-        // engine keeps the name and the modification time when it copies one.
-        if let Ok(path) = url.to_file_path() {
-            on_disk.push(path);
-            continue;
+        let given = || names.as_ref().and_then(|list| list.get(index)).cloned();
+        match picked {
+            FilePath::Path(path) => on_disk.push(path),
+            // A file:// URL is a path this process can open like any other, and
+            // the engine keeps the name and the modification time when it
+            // copies one. Anything else is an Android content:// URI.
+            FilePath::Url(url) => match url.to_file_path() {
+                Ok(path) => on_disk.push(path),
+                Err(()) => streams.push((FilePath::Url(url), given())),
+            },
         }
-
-        let given = names.as_ref().and_then(|list| list.get(index));
-        let name = picked_name(&app, url.as_str(), given.map(String::as_str));
-        let file = open_picked(&app, FilePath::Url(url))?;
-        engine
-            .import_reader(&name, &into, tokio::fs::File::from_std(file))
-            .await
-            .map_err(failed)?;
-        streamed += 1;
     }
 
-    let copied = if on_disk.is_empty() {
+    // The batch goes first, so that a stream that cannot be opened does not
+    // throw away the files picked beside it in the same call.
+    let mut imported = if on_disk.is_empty() {
         0
     } else {
         engine.import_files(on_disk, &into).await.map_err(failed)?
     };
-    Ok(copied + streamed)
+
+    for (stream, given) in streams {
+        let uri = stream.to_string();
+        let name = picked_name(&app, &uri, given.as_deref()).await;
+        let file = open_picked(&app, stream).await?;
+        engine
+            .import_reader(&name, &into, tokio::fs::File::from_std(file))
+            .await
+            .map_err(failed)?;
+        imported += 1;
+    }
+
+    Ok(imported)
 }
 
 #[tauri::command]
@@ -144,33 +163,59 @@ pub async fn open_entry(
     app: AppHandle,
     handle: State<'_, EngineHandle>,
 ) -> Answer<()> {
-    use tauri_plugin_opener::OpenerExt;
-
     let absolute = handle
         .engine()
         .await?
         .absolute_path(&path)
         .map_err(failed)?;
-    app.opener()
-        .open_path(absolute.to_string_lossy(), None::<&str>)
-        .map_err(|error| error.to_string())
+    open_absolute(app, absolute).await
+}
+
+/// On Android the opener plugin cannot do this.
+///
+/// Its mobile side builds an `ACTION_VIEW` out of the string it is given read
+/// as a URI, and an absolute filesystem path has no scheme at all, while a
+/// `file://` one throws `FileUriExposedException` on Android 7 and later. The
+/// `owl` plugin hands out a `FileProvider` content URI instead, which is what
+/// every other application on the phone is allowed to read.
+#[cfg(target_os = "android")]
+async fn open_absolute(app: AppHandle, path: PathBuf) -> Answer<()> {
+    use crate::android::OwlExt;
+
+    blocking(move || app.owl().open_path(&path.to_string_lossy()).map_err(failed)).await
+}
+
+#[cfg(not(target_os = "android"))]
+async fn open_absolute(app: AppHandle, path: PathBuf) -> Answer<()> {
+    use tauri_plugin_opener::OpenerExt;
+
+    blocking(move || {
+        app.opener()
+            .open_path(path.to_string_lossy(), None::<&str>)
+            .map_err(|error| error.to_string())
+    })
+    .await
 }
 
 /// Shows the sync folder in the system's file manager.
-///
-/// Android has no file manager to hand a path to, and the folder is in shared
-/// storage where every one of them can already see it, so there it does nothing
-/// rather than failing. The interface does not draw the button there either.
 #[tauri::command]
 pub async fn reveal_folder(handle: State<'_, EngineHandle>) -> Answer<()> {
-    let engine = handle.engine().await?;
+    reveal(handle.engine().await?.folder()).await
+}
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    tauri_plugin_opener::reveal_item_in_dir(engine.folder()).map_err(|error| error.to_string())?;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn reveal(folder: PathBuf) -> Answer<()> {
+    blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(folder).map_err(|error| error.to_string())
+    })
+    .await
+}
 
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    let _ = engine;
-
+/// Android has no file manager to hand a path to, and the folder is in shared
+/// storage where every one of them can already see it, so there this does
+/// nothing rather than failing. The interface does not draw the button either.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+async fn reveal(_folder: PathBuf) -> Answer<()> {
     Ok(())
 }
 
@@ -182,16 +227,14 @@ pub async fn set_folder(path: String, handle: State<'_, EngineHandle>) -> Answer
         .set_folder(PathBuf::from(path))
         .await
         .map_err(failed)?;
-    remember(&handle, &engine);
-    Ok(())
+    remember(&handle, &engine).await
 }
 
 #[tauri::command]
 pub async fn set_device_name(name: String, handle: State<'_, EngineHandle>) -> Answer<()> {
     let engine = handle.engine().await?;
     engine.set_device_name(name).await.map_err(failed)?;
-    remember(&handle, &engine);
-    Ok(())
+    remember(&handle, &engine).await
 }
 
 #[tauri::command]
@@ -248,12 +291,16 @@ pub async fn forget_peer(id: String, handle: State<'_, EngineHandle>) -> Answer<
 pub async fn all_files_permission(app: AppHandle) -> Answer<String> {
     #[cfg(target_os = "android")]
     {
-        use crate::android::OwlExt;
-        // A phone that cannot answer has not granted anything.
-        Ok(app.owl().all_files_permission().unwrap_or_else(|error| {
-            tracing::warn!(%error, "could not read the storage permission");
-            "denied".to_string()
-        }))
+        blocking(move || {
+            use crate::android::OwlExt;
+
+            // A phone that cannot answer has not granted anything.
+            Ok(app.owl().all_files_permission().unwrap_or_else(|error| {
+                tracing::warn!(%error, "could not read the storage permission");
+                "denied".to_string()
+            }))
+        })
+        .await
     }
 
     #[cfg(not(target_os = "android"))]
@@ -268,13 +315,43 @@ pub async fn all_files_permission(app: AppHandle) -> Answer<String> {
 pub async fn open_all_files_settings(app: AppHandle) -> Answer<()> {
     #[cfg(target_os = "android")]
     {
-        use crate::android::OwlExt;
-        app.owl().open_all_files_settings().map_err(failed)
+        blocking(move || {
+            use crate::android::OwlExt;
+
+            app.owl().open_all_files_settings().map_err(failed)
+        })
+        .await
     }
 
     #[cfg(not(target_os = "android"))]
     {
         let _ = app;
+        Ok(())
+    }
+}
+
+/// Tells the shell what colour the page is drawn on.
+///
+/// Android only. The web layer is padded in by the system bar insets, so the
+/// strips that leaves show the window background, and that background follows
+/// the system's dark mode while the page follows the person's own choice. They
+/// disagree the moment someone picks Light on a phone that is in dark mode, and
+/// the result is a dark band above and below a light page.
+#[tauri::command]
+pub async fn set_window_theme(dark: bool, app: AppHandle) -> Answer<()> {
+    #[cfg(target_os = "android")]
+    {
+        blocking(move || {
+            use crate::android::OwlExt;
+
+            app.owl().set_window_theme(dark).map_err(failed)
+        })
+        .await
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (app, dark);
         Ok(())
     }
 }
@@ -295,24 +372,37 @@ pub async fn set_paused(paused: bool, handle: State<'_, EngineHandle>) -> Answer
 /// Both of them live in the engine while the app runs, so this takes them from
 /// there rather than from the argument: whatever the engine accepted is what
 /// should be on disk. `MainActivity` reads the same file to find the folder a
-/// shared file goes into, so this is what keeps the two in step.
-fn remember(handle: &EngineHandle, engine: &Engine) {
+/// shared file goes into, so this is what keeps the two in step, and a write
+/// that failed is the command failing: the alternative is an interface showing
+/// the new folder while every shared file keeps going to the old one.
+async fn remember(handle: &EngineHandle, engine: &Engine) -> Answer<()> {
     let settings = Settings {
         folder: engine.folder(),
         device_name: engine.state().device.name,
     };
-    if let Err(error) = settings.save(&handle.data_dir) {
-        tracing::warn!(dir = %handle.data_dir.display(), %error, "could not save settings.json");
-    }
+    let dir = handle.data_dir.clone();
+    blocking(move || {
+        settings.save(&dir).map_err(|error| {
+            format!(
+                "the change was made but could not be written to {}: {error:#}",
+                dir.display()
+            )
+        })
+    })
+    .await
 }
 
 /// Opens a picked file, whatever kind of reference the dialog gave for it.
-fn open_picked(app: &AppHandle, path: FilePath) -> Result<std::fs::File, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    app.fs()
-        .open(path, options)
-        .map_err(|error| format!("opening the picked file: {error}"))
+async fn open_picked(app: &AppHandle, path: FilePath) -> Answer<std::fs::File> {
+    let app = app.clone();
+    blocking(move || {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        app.fs()
+            .open(path, options)
+            .map_err(|error| format!("opening the picked file: {error}"))
+    })
+    .await
 }
 
 /// The name a picked file keeps.
@@ -321,17 +411,22 @@ fn open_picked(app: &AppHandle, path: FilePath) -> Result<std::fs::File, String>
 /// asked for through the `owl` plugin, the same column `MainActivity` reads for
 /// a share. When there is no answer the file still has to land somewhere, and
 /// a timestamp is a name a person can at least find.
-fn picked_name(app: &AppHandle, uri: &str, given: Option<&str>) -> String {
-    given
+async fn picked_name(app: &AppHandle, uri: &str, given: Option<&str>) -> String {
+    if let Some(name) = given.and_then(usable_name) {
+        return name;
+    }
+    if let Some(name) = display_name(app, uri)
+        .await
+        .as_deref()
         .and_then(usable_name)
-        .or_else(|| display_name(app, uri).as_deref().and_then(usable_name))
-        .unwrap_or_else(|| {
-            let millis = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|since| since.as_millis())
-                .unwrap_or(0);
-            format!("shared-{millis}")
-        })
+    {
+        return name;
+    }
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis())
+        .unwrap_or(0);
+    format!("shared-{millis}")
 }
 
 /// The last segment of `raw`, or nothing when that is not a name a file can
@@ -346,20 +441,26 @@ fn usable_name(raw: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "android")]
-fn display_name(app: &AppHandle, uri: &str) -> Option<String> {
+async fn display_name(app: &AppHandle, uri: &str) -> Option<String> {
     use crate::android::OwlExt;
 
-    match app.owl().display_name(uri) {
-        Ok(name) => name,
-        Err(error) => {
+    let app = app.clone();
+    let uri = uri.to_string();
+    match tauri::async_runtime::spawn_blocking(move || app.owl().display_name(&uri)).await {
+        Ok(Ok(name)) => name,
+        Ok(Err(error)) => {
             tracing::warn!(%error, "could not read the picked file's name");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the name lookup did not finish");
             None
         }
     }
 }
 
 #[cfg(not(target_os = "android"))]
-fn display_name(_app: &AppHandle, _uri: &str) -> Option<String> {
+async fn display_name(_app: &AppHandle, _uri: &str) -> Option<String> {
     None
 }
 

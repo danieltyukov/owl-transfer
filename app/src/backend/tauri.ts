@@ -69,29 +69,58 @@ function createFrame(): WindowFrame {
     onMaximizedChange(cb): Unsubscribe {
       // There is no maximised event, only a resize, and a window is resized far
       // more often than it is maximised. The answer is held so that dragging an
-      // edge does not call back on every frame of the drag.
+      // edge does not call back on every frame of the drag, and it is asked for
+      // before the listener goes on: seeding it alongside would let a resize
+      // that lands first compare against nothing and call back about no change.
       let last: boolean | null = null;
 
-      const seen = (now: boolean): void => {
-        if (now === last) return;
-        last = now;
-        cb(now);
-      };
-
-      void window.isMaximized().then(
-        now => {
-          if (last === null) last = now;
-        },
-        () => undefined,
-      );
-
-      return subscribe(() =>
-        window.onResized(() => {
-          void window.isMaximized().then(seen, () => undefined);
-        }),
-      );
+      return subscribe(async () => {
+        last = await window.isMaximized().catch(() => false);
+        return window.onResized(() => {
+          void window.isMaximized().then(now => {
+            if (now === last) return;
+            last = now;
+            cb(now);
+          }, () => undefined);
+        });
+      });
     },
   };
+}
+
+/**
+ * Tells the shell which theme the page settled on, and again when it changes.
+ *
+ * Android pads the web layer in by the system bar insets, so the strips that
+ * leaves are the window background. That background can only follow the
+ * system's dark mode, and the person may have chosen the other one, so the page
+ * is what has to say. `data-theme` on the root is the choice, its absence means
+ * the system decides, and `theme.ts` owns both.
+ */
+function followTheme(): void {
+  const query = window.matchMedia('(prefers-color-scheme: dark)');
+
+  const isDark = (): boolean => {
+    const chosen = document.documentElement.getAttribute('data-theme');
+    if (chosen === 'dark') return true;
+    if (chosen === 'light') return false;
+    return query.matches;
+  };
+
+  let last: boolean | null = null;
+  const tell = (): void => {
+    const now = isDark();
+    if (now === last) return;
+    last = now;
+    void invoke('set_window_theme', { dark: now }).catch(() => undefined);
+  };
+
+  tell();
+  new MutationObserver(tell).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  });
+  query.addEventListener('change', tell);
 }
 
 /** The last segment of a path, which is the name the file keeps. */
@@ -117,6 +146,8 @@ export async function createTauriBackend(): Promise<Backend> {
     getVersion().catch(() => '0.0.0'),
   ]);
 
+  if (platform === 'android') followTheme();
+
   return {
     platform,
     version,
@@ -134,9 +165,19 @@ export async function createTauriBackend(): Promise<Backend> {
     onDrop: cb =>
       subscribe(() =>
         getCurrentWebview().onDragDropEvent(event => {
-          // 'enter' and 'over' are the hover, which the interface lights up
-          // from the browser's own drag events. Only the drop carries paths.
+          // Only the drop carries paths. The hover is `onDragOver` below.
           if (event.payload.type === 'drop') cb(event.payload.paths);
+        }),
+      ),
+
+    onDragOver: cb =>
+      subscribe(() =>
+        getCurrentWebview().onDragDropEvent(event => {
+          // The shell took the drag off the web layer to read the paths out of
+          // it, so this is the only place the hover can come from in a window.
+          // A drop ends it as surely as a leave does.
+          const { type } = event.payload;
+          cb(type === 'enter' || type === 'over');
         }),
       ),
 
