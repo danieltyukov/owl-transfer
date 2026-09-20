@@ -118,12 +118,8 @@ impl Engine {
         // Directories before the files inside them, shorter paths first;
         // tombstones deepest first, so a directory is empty by the time
         // its own tombstone is applied.
-        live.sort_by(|a, b| {
-            (a.kind != EntryKind::Dir)
-                .cmp(&(b.kind != EntryKind::Dir))
-                .then_with(|| a.path.len().cmp(&b.path.len()))
-        });
-        tombs.sort_by(|a, b| b.path.len().cmp(&a.path.len()));
+        live.sort_by_key(|e| (e.kind != EntryKind::Dir, e.path.len()));
+        tombs.sort_by_key(|e| std::cmp::Reverse(e.path.len()));
 
         let mut copies = Vec::new();
         {
