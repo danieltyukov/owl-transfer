@@ -42,7 +42,7 @@ if ('__TAURI_INTERNALS__' in window) {
       console.error('the shell could not be reached', error);
       root.render(
         <p role="alert" className="startup-error">
-          Owl Transfer could not reach its own engine. Closing this window and
+          OwlTransfer could not reach its own engine. Closing this window and
           opening it again is the thing to try.
         </p>,
       );

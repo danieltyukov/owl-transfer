@@ -228,7 +228,7 @@ export function Files({ backend, state, dir, onDir, onPane, onError, storage }: 
   return (
     <>
       <div className="files-head" data-window-drag="">
-        <OwlMark size={20} label="Owl Transfer" className="files-brand" />
+        <OwlMark size={20} label="OwlTransfer" className="files-brand" />
         <Breadcrumb dir={dir} root={folderName(state.folder)} onDir={onDir} />
         <div className="files-tools">
           {/*

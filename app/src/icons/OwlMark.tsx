@@ -29,7 +29,7 @@ export const OWL_FACE = {
 export interface OwlMarkProps extends Omit<SVGProps<SVGSVGElement>, 'width' | 'height'> {
   size?: number;
   /**
-   * Pass null where the mark sits beside the words "Owl Transfer" already: two
+   * Pass null where the mark sits beside the words "OwlTransfer" already: two
    * accessible names for one thing makes a screen reader say it twice.
    */
   label?: string | null;
@@ -50,7 +50,7 @@ export interface OwlMarkProps extends Omit<SVGProps<SVGSVGElement>, 'width' | 'h
  * The 2.2 stroke and the gap between ring and pupil close up below about 18px.
  * Nothing in the interface draws it smaller than that.
  */
-export function OwlMark({ size = 32, label = 'Owl Transfer', ...rest }: OwlMarkProps) {
+export function OwlMark({ size = 32, label = 'OwlTransfer', ...rest }: OwlMarkProps) {
   const a11y =
     label === null ? { 'aria-hidden': true as const } : { role: 'img', 'aria-label': label };
   return (

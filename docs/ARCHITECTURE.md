@@ -1,6 +1,6 @@
 # Architecture
 
-This describes what Owl Transfer sends over your network, what it writes to
+This describes what OwlTransfer sends over your network, what it writes to
 disk, and how it decides which copy of a file is the right one. It exists
 because the app moves your files between your devices with no service in the
 middle: you should be able to check what it does before you trust a folder to

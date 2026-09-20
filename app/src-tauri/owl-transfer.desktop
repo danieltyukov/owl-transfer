@@ -2,7 +2,7 @@
 Type=Application
 # The product name as a person reads it. The package, the binary and the icon
 # files stay owl-transfer so an installed copy upgrades in place.
-Name=Owl Transfer
+Name=OwlTransfer
 {{#if comment}}
 Comment={{comment}}
 {{/if}}

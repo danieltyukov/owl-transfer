@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetches, instances, renames and subsets the two OFL fonts Owl Transfer ships.
+# Fetches, instances, renames and subsets the two OFL fonts OwlTransfer ships.
 #
 # The output is committed, so this runs rarely: only to pick up an upstream
 # release or to widen the character set. Nothing in the build calls it.

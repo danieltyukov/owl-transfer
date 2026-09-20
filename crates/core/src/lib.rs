@@ -1,4 +1,4 @@
-//! The Owl Transfer engine: identity, discovery, TLS transport, index,
+//! The OwlTransfer engine: identity, discovery, TLS transport, index,
 //! change detection and sync, with one `Engine` type as the public surface.
 //! See docs/ARCHITECTURE.md for the model this implements.
 

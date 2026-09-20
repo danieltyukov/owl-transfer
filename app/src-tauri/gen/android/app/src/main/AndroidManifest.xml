@@ -59,7 +59,7 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
 
-            <!-- Share a photo, a document, anything, to Owl Transfer and it is
+            <!-- Share a photo, a document, anything, to OwlTransfer and it is
                  copied into the sync folder and is on the desktop a moment
                  later. The activity is singleTask, so a share while the app is
                  already open arrives at onNewIntent rather than onCreate. -->

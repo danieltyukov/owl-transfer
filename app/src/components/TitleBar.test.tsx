@@ -83,7 +83,7 @@ describe('TitleBar', () => {
   it('names where the window is, and leaves the brand to one place', async () => {
     render(<App backend={createMockBackend({ window: frame() })} />);
     const bar = await screen.findByRole('banner');
-    expect(bar).toHaveTextContent('Owl Transfer');
+    expect(bar).toHaveTextContent('OwlTransfer');
     expect(bar).toHaveTextContent('Files');
     // The sidebar's own brand would be the same word twice, eleven pixels apart.
     expect(screen.getAllByText('Owl', { exact: false }).length).toBeGreaterThan(0);

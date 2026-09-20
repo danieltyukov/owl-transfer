@@ -1,4 +1,4 @@
-"""Two Owl Transfer desktop instances, driven through WebDriver.
+"""Two OwlTransfer desktop instances, driven through WebDriver.
 
 One `Instance` is one running copy of the app: its own data directory, its own
 sync folder, its own ports, its own `tauri-driver` and its own WebDriver
@@ -251,7 +251,7 @@ class Instance:
         # A port already taken is the usual reason, and waiting out the whole
         # timeout for it hides the one line that says so.
         for message in state.get("errors", []):
-            if message.startswith("Owl Transfer could not start"):
+            if message.startswith("OwlTransfer could not start"):
                 raise AssertionError(f"{self.tag}: {message}")
         return bool(state["device"]["id"]) and self.find(".app") is not None
 

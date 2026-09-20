@@ -108,7 +108,7 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
       // The path is outside every <paths> entry the provider declares, which
       // means the sync folder has been moved somewhere it cannot serve.
       Log.w(TAG, "cannot share $file through the file provider", e)
-      invoke.reject("that file is somewhere Owl Transfer cannot share from")
+      invoke.reject("that file is somewhere OwlTransfer cannot share from")
       return
     }
 
@@ -177,7 +177,7 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
       activity.startActivity(target)
     } catch (e: ActivityNotFoundException) {
       // Some builds have no per app screen. The list of every app that can ask
-      // is the next best thing; the person finds Owl Transfer in it.
+      // is the next best thing; the person finds OwlTransfer in it.
       Log.w(TAG, "no per app screen for all files access, opening the full list", e)
       try {
         activity.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))

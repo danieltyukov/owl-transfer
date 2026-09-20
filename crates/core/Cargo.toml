@@ -1,6 +1,6 @@
 [package]
 name = "owl-core"
-description = "The Owl Transfer sync engine: identity, discovery, TLS transport, index and sync"
+description = "The OwlTransfer sync engine: identity, discovery, TLS transport, index and sync"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

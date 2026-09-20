@@ -202,7 +202,7 @@ impl Drop for Unanswered {
         tracing::error!(%message);
         let state = State {
             paused: true,
-            errors: vec![format!("Owl Transfer could not start: {message}")],
+            errors: vec![format!("OwlTransfer could not start: {message}")],
             ..blank
         };
         self.started
@@ -243,7 +243,7 @@ async fn attempt(
             tracing::error!(%message, "the engine did not start");
             let state = State {
                 paused: true,
-                errors: vec![format!("Owl Transfer could not start: {message}")],
+                errors: vec![format!("OwlTransfer could not start: {message}")],
                 ..blank
             };
             // Recorded before the event, so a `get_state` racing it gets the

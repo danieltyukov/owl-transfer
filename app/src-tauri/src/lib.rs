@@ -180,7 +180,7 @@ pub fn run() {
                 tcp_port,
                 beacon_port,
                 paused,
-                "Owl Transfer starting"
+                "OwlTransfer starting"
             );
 
             let config = Config {
@@ -208,7 +208,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building Owl Transfer")
+        .expect("error while building OwlTransfer")
         .run(|app, event| {
             // The index and the peer list are written here. Everything else the
             // engine holds is already on disk, but an index that was never

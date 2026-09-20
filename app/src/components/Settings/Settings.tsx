@@ -138,7 +138,7 @@ export function Settings({ backend, state, theme, onTheme, onError, storage }: S
               About
             </p>
             <p className="panel-note">
-              Owl Transfer <span className="mono">{backend.version}</span>. One folder, two
+              OwlTransfer <span className="mono">{backend.version}</span>. One folder, two
               devices, no account and no server.
             </p>
             <div className="settings-row">
@@ -150,7 +150,7 @@ export function Settings({ backend, state, theme, onTheme, onError, storage }: S
                 }}
               >
                 <ExternalGlyph />
-                Owl Transfer is open source
+                OwlTransfer is open source
               </button>
             </div>
           </section>

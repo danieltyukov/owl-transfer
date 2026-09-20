@@ -1,4 +1,4 @@
-"""Two Owl Transfer desktops on one Linux machine, end to end.
+"""Two OwlTransfer desktops on one Linux machine, end to end.
 
 The steps are the ones in the plan's task E1, in order, and they share one pair
 of running instances: A on 52734 and B on 52744, with beacons on ports that

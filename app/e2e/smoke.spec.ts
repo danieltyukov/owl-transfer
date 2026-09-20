@@ -113,7 +113,7 @@ test('the desktop chrome draws its own title bar and follows the window', async 
   await page.goto('/?frame');
 
   const bar = page.getByRole('banner');
-  await expect(bar).toContainText('Owl Transfer');
+  await expect(bar).toContainText('OwlTransfer');
   await expect(bar).toContainText('Files');
 
   const controls = page.getByRole('group', { name: 'Window' });

@@ -6,7 +6,7 @@ import { OWL_FACE, OWL_FACE_PATH, OwlMark } from './OwlMark.js';
 describe('OwlMark', () => {
   it('names itself, since it is the only thing identifying the app in the header', () => {
     render(<OwlMark />);
-    expect(screen.getByRole('img')).toHaveAccessibleName('Owl Transfer');
+    expect(screen.getByRole('img')).toHaveAccessibleName('OwlTransfer');
   });
 
   it('goes silent beside a visible wordmark rather than saying the name twice', () => {

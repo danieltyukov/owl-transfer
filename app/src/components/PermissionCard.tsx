@@ -119,7 +119,7 @@ export function PermissionCard({ permission, onOpenSettings }: PermissionCardPro
       </p>
       <p className="panel-note">
         {granted
-          ? 'Owl Transfer can read and write the sync folder.'
+          ? 'OwlTransfer can read and write the sync folder.'
           : 'Android keeps the sync folder out of reach until you allow access to all files. Syncing is paused until then.'}
       </p>
       <div className="settings-row">

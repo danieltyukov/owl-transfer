@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the Owl Transfer window is allowed to ask the shell for. The app's own commands are not listed: this file gates the plugins the interface calls directly, which is the file picker, the link opener and the window buttons. Nothing here grants the webview access to the file system; the picked paths go straight to a command and the engine is what reads them.",
+  "description": "What the OwlTransfer window is allowed to ask the shell for. The app's own commands are not listed: this file gates the plugins the interface calls directly, which is the file picker, the link opener and the window buttons. Nothing here grants the webview access to the file system; the picked paths go straight to a command and the engine is what reads them.",
   "windows": ["main"],
   "permissions": [
     "core:default",

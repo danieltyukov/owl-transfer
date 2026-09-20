@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="app/icon-source.svg" width="128" alt="The Owl Transfer icon: an owl's face with two ringed eyes under a V brow, ink on amber.">
+  <img src="app/icon-source.svg" width="128" alt="The OwlTransfer icon: an owl's face with two ringed eyes under a V brow, ink on amber.">
 </p>
 
-<h1 align="center">Owl Transfer</h1>
+<h1 align="center">OwlTransfer</h1>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/desktop-dark.webp">
-  <img src="docs/img/desktop-light.webp" alt="The Owl Transfer desktop app: a sidebar with the sync folder and two paired devices each showing a status dot, a file list in the middle with a sync badge beside every name and one file part way through, and a status strip along the bottom.">
+  <img src="docs/img/desktop-light.webp" alt="The OwlTransfer desktop app: a sidebar with the sync folder and two paired devices each showing a status dot, a file list in the middle with a sync badge beside every name and one file part way through, and a status strip along the bottom.">
 </picture>
 
 A folder that is the same on your Linux or Windows desktop and your Android
@@ -56,7 +56,7 @@ app going to the background Android suspends the connection, and the phone
 catches up the moment it is opened again. There is no foreground service in
 this release.
 
-<img src="docs/img/phone.webp" alt="The same folder on a phone: a header with the owl mark and the Owl Transfer wordmark beside buttons for adding files and making a folder, a file list with a green sync badge and a size beside every name, a status strip along the bottom reading Up to date, and tabs for Files, Devices and Settings under it." width="300">
+<img src="docs/img/phone.webp" alt="The same folder on a phone: a header with the owl mark and the OwlTransfer wordmark beside buttons for adding files and making a folder, a file list with a green sync badge and a size beside every name, a status strip along the bottom reading Up to date, and tabs for Files, Devices and Settings under it." width="300">
 
 ## Install
 
