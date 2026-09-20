@@ -6,6 +6,7 @@ pub mod beacon;
 pub mod clock;
 pub mod config;
 pub mod conn;
+pub mod engine;
 pub mod hash;
 pub mod identity;
 pub mod ignore;
@@ -23,6 +24,7 @@ pub mod vv;
 pub mod watch;
 
 pub use config::{Config, DeviceKind};
+pub use engine::Engine;
 pub use state::{
     DeviceInfo, DirEntry, EntryStatus, NearbyInfo, PairingDirection, PairingInfo, PeerInfo, State,
     SyncSummary, Transfer, TransferDirection, TransferSummary,

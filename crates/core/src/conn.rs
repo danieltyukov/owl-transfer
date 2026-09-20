@@ -57,6 +57,11 @@ impl Connection {
     /// a slow peer while holding its lock; blocks are bounded by the
     /// requester's window.
     pub async fn send(&self, frame: Frame) -> Result<()> {
+        self.try_send(frame)
+    }
+
+    /// The same as `send`, for callers that cannot await.
+    pub fn try_send(&self, frame: Frame) -> Result<()> {
         self.tx
             .send(frame)
             .map_err(|_| anyhow!("connection to {} is closed", self.peer_id))
@@ -222,6 +227,19 @@ async fn write_loop(
 ) {
     let mut closed = closer.subscribe();
     loop {
+        // Frames queued before a close still go out, so a final reject or
+        // accept reaches the peer.
+        match out_rx.try_recv() {
+            Ok(frame) => {
+                if let Err(e) = wr.write_all(&encode(&frame)).await {
+                    debug!("connection write ended: {e}");
+                    break;
+                }
+                continue;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => break,
+        }
         tokio::select! {
             _ = wait_closed(&mut closed) => break,
             next = out_rx.recv() => match next {
