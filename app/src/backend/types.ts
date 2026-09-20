@@ -19,6 +19,13 @@ export interface DeviceInfo {
   name: string;
   kind: DeviceKind;
   port: number;
+  /**
+   * This machine's non-loopback IPv4 addresses, without a port. The interface
+   * shows each one with the port beside it, so a person can read an address off
+   * this device and type it into the other when discovery cannot work. Empty
+   * while the machine is on no network.
+   */
+  addresses: string[];
 }
 
 export interface PeerInfo {

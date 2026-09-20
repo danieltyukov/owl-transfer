@@ -114,7 +114,15 @@ function defaultState(now: number): State {
     address: '192.168.1.31:52734',
   };
   return {
-    device: { id: 'c081e4f7a2d6b93c', name: 'workshop', kind: 'desktop', port: 52734 },
+    device: {
+      id: 'c081e4f7a2d6b93c',
+      name: 'workshop',
+      kind: 'desktop',
+      port: 52734,
+      // Two, because a machine on a wired network and a VPN has two, and the
+      // card has to say which is which by showing both.
+      addresses: ['192.168.1.20', '10.0.0.5'],
+    },
     folder: '/home/you/OwlTransfer',
     paused: false,
     peers: [phone],

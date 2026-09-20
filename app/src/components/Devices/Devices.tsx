@@ -136,11 +136,35 @@ export function Devices({ backend, state, onError }: DevicesProps) {
               <dd>{state.device.name}</dd>
               <dt>Id</dt>
               <dd className="mono">{state.device.id.slice(0, 8)}</dd>
-              <dt>Port</dt>
-              <dd className="mono">{state.device.port}</dd>
+              {state.device.addresses.length === 0 ? (
+                <>
+                  <dt>Port</dt>
+                  <dd className="mono">{state.device.port}</dd>
+                </>
+              ) : (
+                <>
+                  <dt>{state.device.addresses.length === 1 ? 'Address' : 'Addresses'}</dt>
+                  {/*
+                    The port is carried on every line rather than given a row of
+                    its own. What the other device asks for is one string, and a
+                    person reading this out should not have to assemble it.
+                  */}
+                  <dd>
+                    <ul className="self-addresses">
+                      {state.device.addresses.map(address => (
+                        <li key={address} className="mono">
+                          {address}:{state.device.port}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </>
+              )}
             </dl>
             <p className="panel-note">
-              Type this device's address and port on the other one to pair without discovery.
+              {state.device.addresses.length === 0
+                ? 'No network address yet. Join a network and one appears here.'
+                : 'Type one of these on the other device to pair by address.'}
             </p>
           </section>
         </div>

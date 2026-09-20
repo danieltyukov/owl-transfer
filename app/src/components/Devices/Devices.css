@@ -103,11 +103,12 @@
   color: var(--muted);
 }
 
-/* Label over value, two columns, so the three facts read as a small table and
-   the values line up for someone reading them out. */
+/* Label beside value, two columns, so the facts read as a small table and the
+   addresses line up under each other for someone reading them out. The label
+   column holds the longest of them, "Addresses", without crowding it. */
 .self {
   display: grid;
-  grid-template-columns: 62px minmax(0, 1fr);
+  grid-template-columns: 78px minmax(0, 1fr);
   gap: 4px 10px;
   margin: 0;
   font-size: var(--fs-small);
@@ -120,6 +121,15 @@
 .self dd {
   margin: 0;
   color: var(--text);
+}
+
+/* A machine on a wired network and a VPN has two, and neither of them is the
+   one to use more often than the other, so they stack rather than one being
+   chosen for the person. */
+.self-addresses {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 @media (max-width: 480px) {

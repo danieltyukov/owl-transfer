@@ -135,14 +135,40 @@ describe('the devices pane', () => {
     expect(connect).toBeDisabled();
   });
 
-  it('shows what the other side has to type in', async () => {
+  it('shows what the other side has to type in, port and all', async () => {
     const mock = createMockBackend();
     await show(mock);
 
     const self = screen.getByRole('region', { name: 'This device' });
     expect(within(self).getByText('workshop')).toBeInTheDocument();
     expect(within(self).getByText('c081e4f7')).toBeInTheDocument();
+    expect(within(self).getByText('192.168.1.20:52734')).toBeInTheDocument();
+    expect(within(self).getByText('10.0.0.5:52734')).toBeInTheDocument();
+    expect(self).toHaveTextContent('Type one of these on the other device to pair by address.');
+  });
+
+  it('names the row for however many addresses this machine has', async () => {
+    const mock = createMockBackend();
+    await show(mock);
+
+    const self = screen.getByRole('region', { name: 'This device' });
+    expect(within(self).getByText('Addresses')).toBeInTheDocument();
+
+    mock.emitState({ device: { ...mock.state.device, addresses: ['192.168.1.20'] } });
+    expect(await within(self).findByText('Address')).toBeInTheDocument();
+    expect(within(self).queryByText('10.0.0.5:52734')).toBeNull();
+  });
+
+  it('falls back to the port alone while the machine is on no network', async () => {
+    const mock = createMockBackend({
+      state: { device: { ...createMockBackend().state.device, addresses: [] } },
+    });
+    await show(mock);
+
+    const self = screen.getByRole('region', { name: 'This device' });
+    expect(within(self).getByText('Port')).toBeInTheDocument();
     expect(within(self).getByText('52734')).toBeInTheDocument();
+    expect(self).toHaveTextContent('No network address yet. Join a network and one appears here.');
   });
 
   it('says what to try when nothing is in earshot', async () => {
