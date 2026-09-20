@@ -286,9 +286,6 @@ impl Engine {
                     self.dir_over_file(inner, settings, &local, &remote, now, announce)
                         .await;
                 } else {
-                    if local.as_ref().is_some_and(|l| l.is_live_file()) {
-                        inner.losing.insert(remote.path.clone());
-                    }
                     self.want_bytes(inner, peer_id, settings, remote, copies);
                 }
             }
@@ -347,7 +344,6 @@ impl Engine {
                 }
             }
             apply_adopt(&mut inner.index, &remote, now);
-            inner.losing.remove(&remote.path);
             inner.last_change_ms = Some(now);
         } else if remote.kind == EntryKind::Dir {
             let abs = match safe_abs(folder, &remote.path) {
@@ -603,20 +599,11 @@ impl Engine {
             }
         };
         let local = inner.index.get(&remote.path).cloned();
-        let mut decision = decide(local.as_ref(), &remote, me, peer_id);
-        // A live file that lost a conflict is copied aside before any
-        // replacement, even one that arrives as a plain dominating entry
-        // (the peer's further edits, or its own resolution of the same
-        // conflict), so the losing edit is never silently gone.
-        if decision == Decision::Adopt
-            && inner.losing.contains(&remote.path)
-            && local.as_ref().is_some_and(|l| l.is_live_file())
-            && needs_bytes(local.as_ref(), &remote)
-        {
-            decision = Decision::Conflict {
-                winner_remote: true,
-            };
-        }
+        // While a conflict with the peer is unresolved, no dominating entry
+        // for the path can come from it: the winning side stays silent and
+        // the peer can only merge our component by adopting our resolution,
+        // so a plain Adopt here never hides a losing edit.
+        let decision = decide(local.as_ref(), &remote, me, peer_id);
         let wants_bytes = matches!(
             decision,
             Decision::Adopt
@@ -645,7 +632,6 @@ impl Engine {
                     let _ = set_mtime_ms(&dest, remote.mtime_ms);
                 }
                 apply_adopt(&mut inner.index, &remote, now);
-                inner.losing.remove(&remote.path);
                 self.mark_index();
                 return Ok(());
             }
@@ -696,7 +682,6 @@ impl Engine {
                     inner.recent_changes.insert(loser.path.clone(), now);
                     announce.push(loser);
                 }
-                inner.losing.remove(&remote.path);
                 inner.recent_changes.insert(winner.path.clone(), now);
                 announce.push(winner);
             }
