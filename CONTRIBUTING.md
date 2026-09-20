@@ -59,6 +59,9 @@ exactly what a shell test should catch.
 worth running locally after touching the watcher or anything that stats a file.
 The Windows code paths in `notify` and `filetime` are compiled but not executed
 there, which is enough to stop them rotting unseen between Windows releases.
+It needs `rustup target add x86_64-pc-windows-gnu` and a MinGW C compiler,
+`gcc-mingw-w64-x86-64` on Ubuntu, because `ring` builds C for the target and a
+build script runs under `cargo check` like any other.
 
 ## Running each target
 

@@ -66,11 +66,17 @@ jobs:
       - name: Tests
         run: cargo test -p owl-core
 
+      # ring's build script compiles C for the target, which happens under
+      # `cargo check` as well, so the cross-check needs a MinGW C compiler.
+      - name: Install the MinGW C compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y gcc-mingw-w64-x86-64
+
       # Nothing else in CI compiles the Windows halves of notify, filetime and
       # socket2, and the Windows installers are only built on a tag. Without
       # this, a change that breaks `ReadDirectoryChangesW` is discovered by the
-      # release build weeks later. `cargo check` does not link, so no mingw
-      # linker is needed for it.
+      # release build weeks later.
       - name: Check that it still compiles for Windows
         run: cargo check -p owl-core --target x86_64-pc-windows-gnu
 
