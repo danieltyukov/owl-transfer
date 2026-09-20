@@ -80,7 +80,7 @@ and it is worth being deliberate about which devices you pair.
 
 ## Android permissions
 
-The manifest declares six, and each one is doing something specific:
+The manifest declares five, and each one is doing something specific:
 
 | Permission | Why |
 | --- | --- |
@@ -88,14 +88,12 @@ The manifest declares six, and each one is doing something specific:
 | `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE` | Knowing which interfaces exist, to send the discovery beacon to the right broadcast addresses |
 | `CHANGE_WIFI_MULTICAST_STATE` | Taking a `MulticastLock`. Without it the Wi-Fi driver drops incoming broadcasts and the phone never sees another device |
 | `MANAGE_EXTERNAL_STORAGE` | Reading and writing the sync folder at `/storage/emulated/0/OwlTransfer`, where every file manager can see it |
-| `READ_EXTERNAL_STORAGE`, capped at API 32 | The same folder on Android 12 and older, which predate the permission above |
-| `WRITE_EXTERNAL_STORAGE`, capped at API 29 | The same, on Android 10 and older |
 
-The last two carry `android:maxSdkVersion`, so the system stops granting them
-above those levels. On a phone running anything current they are inert: they do
-not appear in the app's permission list and they are never requested. They are
-there because the app supports back to API 26, where the storage model was the
-older one.
+There are no legacy storage permissions in that list. The app requires Android
+11, API 30, or newer, which is the release that introduced the permission above
+and retired the older model, so `READ_EXTERNAL_STORAGE` and
+`WRITE_EXTERNAL_STORAGE` would never be granted on a phone this app runs on and
+are not declared.
 
 `MANAGE_EXTERNAL_STORAGE` is the broad one and it deserves the explanation.
 Android grants it through a system settings screen rather than a dialog, and it

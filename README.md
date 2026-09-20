@@ -53,14 +53,15 @@ relaying across the internet are all deliberately absent.
 Downloads are on the
 [releases page](https://github.com/danieltyukov/owl-transfer/releases/latest).
 
-**Android.** Download `owl-transfer.apk` and open it. Android will ask you to
-allow installs from your browser, once. The app then asks for the All files
-access permission, which is what lets the sync folder live at
-`/storage/emulated/0/OwlTransfer` where every other app can see it; sync stays
-paused until you grant it. Releases from this repository are signed with the
-maintainer's key, which is not Google's, so an update installs over the top
-only if it came from the same place. A fork that builds without the signing
-secrets gets an unsigned APK instead, and `SECURITY.md` says what that means.
+**Android.** Needs Android 11 or newer. Download `owl-transfer.apk` and open
+it. Android will ask you to allow installs from your browser, once. The app
+then asks for the All files access permission, which is what lets the sync
+folder live at `/storage/emulated/0/OwlTransfer` where every other app can see
+it; sync stays paused until you grant it. Releases from this repository are
+signed with the maintainer's key, which is not Google's, so an update installs
+over the top only if it came from the same place. A fork that builds without
+the signing secrets gets an unsigned APK instead, and `SECURITY.md` says what
+that means.
 
 **Linux.** `owl-transfer_x86_64.AppImage` runs anywhere: `chmod +x` it and run
 it. `owl-transfer_amd64.deb` is there for Debian and Ubuntu, installed with
