@@ -1,0 +1,89 @@
+name: Bug report
+description: Something behaves differently from how it is documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is a security problem, do not open an issue. Use the Security
+        tab and "Report a vulnerability" instead, as described in SECURITY.md.
+
+        Do not paste a full device id or the contents of `device.json`. The
+        first holds your certificate fingerprint and the second holds the
+        private key. The first eight characters of an id, which is what the app
+        shows you, are enough for any report.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where it happened. Pick every one you have reproduced it on.
+      multiple: true
+      options:
+        - Linux desktop (AppImage)
+        - Linux desktop (deb)
+        - Windows (installer)
+        - Android (APK)
+        - Built from source
+        - Browser, against the mock backend (npm run dev -w app)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release tag, or the commit SHA if you built from source.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: OS and version on each device involved
+      placeholder: Ubuntu 24.04 and Android 15 on a Pixel 7
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, in order, starting from a state you can describe.
+      placeholder: |
+        1. Pair the phone and the laptop, both on the same Wi-Fi
+        2. Copy a 200 MB video into the folder on the laptop
+        3. Watch the Files screen on the phone
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Errors, if any
+      description: >
+        Desktop logs go to the terminal when you run the binary directly.
+        Android logs come from `adb logcat`. The app also shows the last few
+        errors as toasts, and those lines are worth copying.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: setup
+    attributes:
+      label: Setup
+      options:
+        - label: The two devices were paired by address rather than from Nearby
+        - label: More than two devices share the folder
+        - label: The sync folder is on an external drive, a network mount or an SD card
+        - label: On Android, All files access is granted
+        - label: A file manager or another app writes into the folder as well
