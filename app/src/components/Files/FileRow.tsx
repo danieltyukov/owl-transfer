@@ -40,6 +40,8 @@ export interface FileRowProps {
   now: number;
   onOpen: (entry: DirEntry) => void;
   onMenu: (entry: DirEntry, at: { x: number; y: number }) => void;
+  /** True while this row's menu is the one on screen. */
+  expanded: boolean;
 }
 
 const LONG_PRESS_MS = 500;
@@ -56,7 +58,7 @@ const SLOP_PX = 6;
  * any movement past a few pixels, so a scroll that starts on a row is a scroll
  * and not a menu.
  */
-export function FileRow({ entry, now, onOpen, onMenu }: FileRowProps) {
+export function FileRow({ entry, now, onOpen, onMenu, expanded }: FileRowProps) {
   const Glyph = glyphFor(entry);
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
 
@@ -109,6 +111,7 @@ export function FileRow({ entry, now, onOpen, onMenu }: FileRowProps) {
         className="row-more"
         aria-label={`More for ${entry.name}`}
         aria-haspopup="menu"
+        aria-expanded={expanded}
         onClick={e => {
           const box = e.currentTarget.getBoundingClientRect();
           onMenu(entry, { x: box.right, y: box.bottom });

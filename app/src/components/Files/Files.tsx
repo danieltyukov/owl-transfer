@@ -151,17 +151,23 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
         <OwlMark size={20} label="Owl Transfer" className="files-brand" />
         <Breadcrumb dir={dir} root={folderName(state.folder)} onDir={onDir} />
         <div className="files-tools">
-          <button type="button" className="button" onClick={addFiles}>
+          {/*
+            The label is hidden rather than dropped on a narrow phone, and the
+            aria-label carries the name at every width, so the button is called
+            the same thing whether or not the word is on screen.
+          */}
+          <button type="button" className="button" aria-label="Add files" onClick={addFiles}>
             <PlusGlyph />
-            Add files
+            <span className="button-label">Add files</span>
           </button>
           <button
             type="button"
             className="button"
+            aria-label="New folder"
             onClick={() => startDialogue({ kind: 'new-folder' })}
           >
             <FolderPlusGlyph />
-            New folder
+            <span className="button-label">New folder</span>
           </button>
         </div>
       </div>
@@ -185,6 +191,7 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
                   now={now}
                   onOpen={open}
                   onMenu={(target, at) => setMenu({ entry: target, at })}
+                  expanded={menu?.entry.path === entry.path}
                 />
               ))}
             </ul>

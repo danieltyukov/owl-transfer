@@ -89,3 +89,21 @@ button.crumb:hover {
     display: block;
   }
 }
+
+/* A 390px header holds the mark, the folder and two controls, but not two
+   controls with their names on. The glyphs keep their labels to the screen
+   reader. */
+@media (max-width: 560px) {
+  .files-head {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+
+  .button-label {
+    display: none;
+  }
+
+  .files-tools .button {
+    padding-inline: 8px;
+  }
+}

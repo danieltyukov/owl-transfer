@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -217,5 +217,52 @@ describe('the files pane', () => {
 
     await user.click(screen.getByRole('button', { name: 'Add files' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Those files could not be added.');
+  });
+});
+
+describe('the row menu', () => {
+  it('walks its items with the arrow keys and closes on Escape', async () => {
+    const user = userEvent.setup();
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    const opener = screen.getByRole('button', { name: 'More for readme.txt' });
+    await user.click(opener);
+    expect(opener).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('menuitem', { name: 'Open' })).toHaveFocus();
+
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus();
+    await user.keyboard('{ArrowUp}{ArrowUp}');
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it('closes when the press lands anywhere else', async () => {
+    const user = userEvent.setup();
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^readme\.txt/ });
+
+    await user.click(screen.getByRole('button', { name: 'More for readme.txt' }));
+    const menu = screen.getByRole('menu');
+
+    // The layer over the window is what catches that press, so there is no
+    // document listener to add and forget to remove.
+    fireEvent.mouseDown(menu.parentElement!);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('opens the entry from the menu, same as pressing the row', async () => {
+    const user = userEvent.setup();
+    render(<App backend={createMockBackend()} />);
+    await screen.findByRole('button', { name: /^Photos/ });
+
+    await user.click(screen.getByRole('button', { name: 'More for Photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Open' }));
+
+    expect(await screen.findByRole('heading', { name: 'Photos' })).toBeInTheDocument();
   });
 });

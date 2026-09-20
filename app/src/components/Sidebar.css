@@ -33,8 +33,12 @@
   padding: 0 8px 14px;
   font-size: var(--fs-mini);
   color: var(--faint);
+  /* Truncated at the start, not the end: the last segment is the name a person
+     recognises and the home prefix is the part they already know. `rtl` moves
+     the ellipsis to the front; `left` keeps the line itself flush with the nav
+     under it, which `start` would not in an rtl box. */
   direction: rtl;
-  text-align: start;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
