@@ -45,8 +45,7 @@ impl Engine {
             }
             inner.watcher = Some(watcher);
         }
-        self.scan_rels(&settings, vec![String::new()], floor, true)
-            .await?;
+        self.scan_rels(&settings, vec![String::new()], true).await?;
         if let Some(floor) = floor {
             self.raise_all(floor).await;
         }
@@ -92,7 +91,7 @@ impl Engine {
             self.error("the sync folder is missing".to_string()).await;
             return;
         }
-        if let Err(e) = self.scan_rels(&settings, rels, None, false).await {
+        if let Err(e) = self.scan_rels(&settings, rels, false).await {
             self.error(format!("scanning: {e:#}")).await;
         }
         self.publish_state().await;
@@ -106,13 +105,7 @@ impl Engine {
     /// it stop before touching the index; the next first scan catches up.
     /// `first` marks the scan a start, resume or switch runs, which is
     /// where the test hook's hash delay applies.
-    async fn scan_rels(
-        &self,
-        settings: &Settings,
-        rels: Vec<String>,
-        floor: Option<u64>,
-        first: bool,
-    ) -> Result<()> {
+    async fn scan_rels(&self, settings: &Settings, rels: Vec<String>, first: bool) -> Result<()> {
         let me = self.shared.identity.id.clone();
         let walked = walk_paths(&settings.folder, &rels).await?;
         let (mut out, to_hash) = {
@@ -122,8 +115,7 @@ impl Engine {
                 return Ok(());
             }
             let now = now_ms();
-            let (mut out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
-            raise_counters(&mut inner, &mut out, 0, &me, floor);
+            let (out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
             for dir in &walked.unreadable {
                 if inner.unreadable.insert(dir.clone()) {
                     inner.push_error(format!(
@@ -137,7 +129,6 @@ impl Engine {
             }
             (out, to_hash)
         };
-        let raised_upto = out.changed.len();
         if first {
             let delay = self
                 .shared
@@ -155,7 +146,6 @@ impl Engine {
         }
         let now = now_ms();
         apply_hashes(&mut inner.index, hashed, &me, now, &mut out);
-        raise_counters(&mut inner, &mut out, raised_upto, &me, floor);
         self.absorb_local_changes(&mut inner, out, now);
         Ok(())
     }
@@ -298,29 +288,6 @@ pub(crate) async fn list_dir(engine: &Engine, rel: &str) -> Result<Vec<DirEntry>
 
 /// Temporary files older than this are stale.
 const TEMP_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
-
-/// Sets every changed entry's counter to one above `floor`, under the same
-/// lock that made the entries, so no peer ever sees them lower.
-fn raise_counters(
-    inner: &mut Inner,
-    out: &mut ScanOutcome,
-    from: usize,
-    me: &str,
-    floor: Option<u64>,
-) {
-    let Some(floor) = floor else {
-        return;
-    };
-    // Only the entries this phase produced, and only on top of what they
-    // hold: a vector a peer merged in meanwhile is kept, and an entry the
-    // scan already bumped above the floor is left alone.
-    for entry in out.changed.iter_mut().skip(from) {
-        if entry.vv.get(me).copied().unwrap_or(0) <= floor {
-            bump(&mut entry.vv, me, floor);
-            inner.index.insert(entry.clone());
-        }
-    }
-}
 
 /// Deletes stale `.owl-tmp-*` files under `folder`, never following links
 /// and never entering the engine's own metadata directory. Files in
@@ -560,7 +527,6 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
         inner.index.clear();
         inner.recent_changes.clear();
         inner.unreadable.clear();
-        inner.losing.clear();
         Index::delete_file(&engine.shared.data_dir)?;
         floor
     };

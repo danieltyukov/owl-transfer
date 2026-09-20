@@ -392,7 +392,7 @@ async fn download_blocks(
         let (offset, res) = joined.context("block task failed")?;
         let (status, data) = res?;
         if status != BLOCK_OK {
-            bail!("peer no longer has {path} at the announced version");
+            bail!("the peer cannot serve {path} right now: it is paused or the file changed");
         }
         let expected = (size - offset).min(BLOCK_SIZE as u64) as usize;
         if data.len() != expected {

@@ -1360,6 +1360,59 @@ async fn a_paused_engine_keeps_its_links_and_catches_up_on_resume() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_conflict_settled_by_a_remote_delete_leaves_no_stale_copy() {
+    let a = start("Alpha").await;
+    let mut b = start("Beta").await;
+    pair(&a, &b).await;
+
+    a.write("doc.txt", b"base");
+    assert!(wait_for_bytes(&b, "doc.txt", b"base", WAIT).await);
+    b.engine.shutdown().await;
+    assert!(wait_until(|| !connected_to(&a.engine, &b.id()), WAIT).await);
+
+    // Both edit while apart; beta's edit is newer, so alpha is the losing
+    // side, and its downloads of beta's version keep failing.
+    a.write("doc.txt", b"alpha edit");
+    assert!(wait_until(|| a.engine.state().summary.bytes == 10, WAIT).await);
+    b.write("doc.txt", b"beta edit, newer");
+    let newer = mtime_ms(&a.path("doc.txt")) + 5000;
+    owl_core::clock::set_mtime_ms(&b.path("doc.txt"), newer).unwrap();
+    b.restart().await;
+    b.engine.fail_next_blocks_for_tests(3);
+    assert!(
+        wait_until(
+            || connected_to(&a.engine, &b.id()) && connected_to(&b.engine, &a.id()),
+            RECONNECT_WAIT
+        )
+        .await
+    );
+
+    // Beta deletes the file during alpha's retry window. Alpha's edit wins
+    // that delete-versus-edit and beta takes it back; the conflict is
+    // settled without alpha's download ever succeeding.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    b.engine.delete_entry("doc.txt").await.unwrap();
+    assert!(wait_for_bytes(&b, "doc.txt", b"alpha edit", RECONNECT_WAIT).await);
+
+    // Beta's next ordinary edit, on top of alpha's version, must arrive as
+    // exactly that: a replacement with no conflict copy anywhere. A flag
+    // left over from the lost conflict used to turn it into one.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    b.write("doc.txt", b"beta edit on top");
+    assert!(wait_for_bytes(&a, "doc.txt", b"beta edit on top", WAIT).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(a.files(), vec!["doc.txt"]);
+    assert_eq!(b.files(), vec!["doc.txt"]);
+    assert_eq!(
+        b.read("doc.txt").as_deref(),
+        Some(b"beta edit on top".as_slice())
+    );
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn listing_and_imports_reflect_sync_status() {
     let a = start("Alpha").await;
     a.write("alone.txt", b"nobody has this yet");
