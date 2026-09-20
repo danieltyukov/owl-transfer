@@ -516,11 +516,16 @@ def test_11_new_folder(pair, measure):
     a.type_into(a.wait_for('[role="dialog"] input[aria-label="Name"]'), "Made here")
     a.dialog_submit("Create")
 
+    # A's own folder first, so that a dialog that did nothing is told apart
+    # from sync that carried nothing.
+    wait_until(lambda: (a.folder / "Made here").is_dir(), UI, "the dialog created nothing")
     _, waited = wait_until(
         lambda: (b.folder / "Made here").is_dir(), SYNC, "the new folder did not reach B"
     )
     measure(f"folder in {waited * 1000:.0f} ms")
-    assert a.row("Made here") is not None
+    # The screen follows the engine by an event, so the row is waited for
+    # rather than read the instant the folder is on disk.
+    a.wait_for_row("Made here")
 
 
 def test_11_a_name_a_file_cannot_have_is_refused(pair):

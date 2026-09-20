@@ -371,10 +371,20 @@ class Instance:
         `clear()` sets the value behind React's back and the component puts the
         old one straight back; selecting everything and typing over it is what a
         person does and what React hears.
+
+        The wait at the end is not ceremony. The keystrokes are delivered and
+        answered one at a time, and a submit sent before the last of them has
+        been through React presses a button the component still thinks should
+        be disabled, which does nothing and looks like sync losing a file.
         """
         element.click()
         element.send_keys(Keys.CONTROL, "a")
         element.send_keys(text)
+        wait_until(
+            lambda: element.get_attribute("value") == text,
+            UI,
+            f"{self.tag}: the field did not take {text!r}",
+        )
 
     def pane(self) -> str:
         return self.wait_for(".app").get_attribute("data-pane") or ""
