@@ -11,6 +11,7 @@ import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.WindowCompat
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
@@ -138,6 +139,11 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
    * the status bar and the gesture handle are this. The theme resource follows
    * the system's dark mode, which is the right guess before the page has
    * painted and the wrong one afterwards for anyone who chose otherwise.
+   *
+   * The clock, the signal icons and the gesture handle are drawn by the system
+   * on top of those strips, and the system is told which way round they go
+   * separately from the colour. Without that, a light phone showing a dark
+   * page draws dark icons on the dark strip and the clock disappears.
    */
   @Command
   fun setWindowTheme(invoke: Invoke) {
@@ -148,6 +154,9 @@ class OwlPlugin(private val activity: Activity) : Plugin(activity) {
     )
     activity.runOnUiThread {
       activity.window.setBackgroundDrawable(ColorDrawable(colour))
+      val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+      bars.isAppearanceLightStatusBars = !args.dark
+      bars.isAppearanceLightNavigationBars = !args.dark
     }
     invoke.resolve(JSObject())
   }
