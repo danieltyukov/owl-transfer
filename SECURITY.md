@@ -169,6 +169,42 @@ APK signed by one key cannot install over one signed by another, in either
 direction. Crossing between them means uninstalling, which destroys the data
 directory and with it the device's identity and its pairings.
 
+## Known advisories
+
+One advisory is open against a transitive dependency, and it cannot be fixed
+from this repository. It is written up here rather than left for a reader to
+find in the Dependabot tab and wonder about.
+
+**`glib`, unsoundness in the `Iterator` and `DoubleEndedIterator` impls for
+`VariantStrIter`.** It affects 0.15 through 0.19 and is fixed in 0.20. This
+project resolves `glib` 0.18.5.
+
+It arrives through Tauri's Linux GTK stack, and not by one route.
+`cargo tree -i gtk --target x86_64-unknown-linux-gnu` shows `gtk` 0.18.2 under
+seven parents: `tao` for the window, `muda` for the menus, `webkit2gtk` and
+`wry` for the WebView, and `tauri`, `tauri-runtime` and `tauri-runtime-wry`
+themselves. Turning a feature off does not drop it.
+
+**It reaches the Linux desktop build alone.** Run the same query against
+`x86_64-pc-windows-msvc` or `aarch64-linux-android` and it prints nothing,
+because the GTK stack is gated to Linux. The APK and the two Windows
+installers contain no `glib` at all.
+
+**Nothing here can reach the affected code.** The unsound iterators walk a
+GVariant string array. No code in this repository constructs or iterates a
+GVariant, and the crate that does the work this document is about, `crates/core`,
+has no GTK dependency in the first place: its tree is tokio, rustls, notify,
+blake3, serde and their dependencies, on every platform. The sync engine, the
+transport and the file handling are all out of reach of it even on Linux.
+
+**The fix has to arrive as a Tauri release.** `gtk` 0.18 is what pins `glib`
+below 0.20, and Tauri 2.11.6, the version this repository builds against, still
+builds on `gtk` 0.18. `cargo update -p glib` locks zero packages. It clears
+when Tauri moves to `gtk` 0.20, or when the Linux backend moves off GTK WebKit,
+and not before.
+
+It is re-checked whenever Tauri is upgraded.
+
 ## Scope
 
 In scope: anything that lets a device you have not paired with read your files,
