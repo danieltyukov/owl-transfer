@@ -1,4 +1,8 @@
 <resources>
     <string name="app_name">"Owl Transfer"</string>
     <string name="main_activity_title">"Owl Transfer"</string>
+    <!-- Shown when a file is shared to the app before All files access has been
+         granted. The share is refused, and the activity comes forward anyway,
+         so the storage card on the Files screen is the next thing in view. -->
+    <string name="share_needs_storage">"Owl Transfer needs All files access before it can take a share. Grant it on the Files screen, then share again."</string>
 </resources>
