@@ -6,7 +6,7 @@ name: Pages
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     # Everything the page is built from, including what it reads from outside
     # site/. A change to the app's tokens or the bundled fonts changes how the
     # site looks, so it has to redeploy for those too, and the root lockfile is

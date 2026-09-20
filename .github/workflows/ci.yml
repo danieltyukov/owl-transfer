@@ -4,7 +4,7 @@ name: CI
 # unmetered on a public repository with standard runners; a larger runner bills
 # even on a public repository, so `runs-on` never names one.
 
-# Pushes to main, and every pull request. Not every branch: a push to a branch
+# Pushes to master, and every pull request. Not every branch: a push to a branch
 # that has a pull request open would run the whole workflow twice, once per
 # event, and the two runs sit in different concurrency groups because
 # `github.ref` differs, so neither cancels the other. Work on a branch is
@@ -12,7 +12,7 @@ name: CI
 # the Actions tab, which is what workflow_dispatch is here for.
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
