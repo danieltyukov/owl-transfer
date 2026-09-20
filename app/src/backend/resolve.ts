@@ -1,4 +1,4 @@
-import { createMockBackend } from './mock.js';
+import { createMockBackend, createMockFrame } from './mock.js';
 import type { Backend } from './types.js';
 
 /*
@@ -20,14 +20,6 @@ declare global {
   }
 }
 
-/** A frame whose buttons do nothing, for previewing the desktop chrome in a tab. */
-const previewFrame = {
-  minimize: () => Promise.resolve(),
-  toggleMaximize: () => Promise.resolve(),
-  close: () => Promise.resolve(),
-  startDrag: () => Promise.resolve(),
-};
-
 export function resolveBackend(): Backend {
   const shell = typeof window === 'undefined' ? undefined : window.__owlBackend;
   if (shell !== undefined) return shell;
@@ -39,7 +31,9 @@ export function resolveBackend(): Backend {
   const query = typeof location === 'undefined' ? '' : location.search;
   const params = new URLSearchParams(query);
   return createMockBackend({
-    ...(params.has('frame') ? { window: previewFrame } : {}),
+    // A frame with no window behind it, for looking at the desktop chrome
+    // in a browser tab.
+    ...(params.has('frame') ? { window: createMockFrame() } : {}),
     ...(params.has('android') ? { platform: 'android' as const, permission: 'denied' as const } : {}),
   });
 }

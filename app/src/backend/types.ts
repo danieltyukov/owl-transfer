@@ -115,6 +115,18 @@ export interface WindowFrame {
   toggleMaximize(): Promise<void>;
   close(): Promise<void>;
   startDrag(): Promise<void>;
+  /**
+   * Asked once when the controls mount. A window restored from a maximised
+   * session is already maximised before anything here has run, and without
+   * this the control would offer to maximise what already is.
+   */
+  isMaximized(): Promise<boolean>;
+  /**
+   * Followed afterwards. The window manager maximises a window by other routes
+   * than this app's own button: a double press on the title bar, a keyboard
+   * shortcut, a drag to the top of the screen.
+   */
+  onMaximizedChange(cb: (maximized: boolean) => void): Unsubscribe;
 }
 
 export interface Backend {

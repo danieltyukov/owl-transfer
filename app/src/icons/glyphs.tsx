@@ -53,6 +53,31 @@ export function MaximizeGlyph(props: GlyphProps) {
   );
 }
 
+/** Two offset frames: the window is maximised and this puts it back. */
+export function RestoreGlyph(props: GlyphProps) {
+  return (
+    <Glyph {...props}>
+      <path
+        d="M6.5 5.5 V4.5 A1 1 0 0 1 7.5 3.5 H11.5 A1 1 0 0 1 12.5 4.5 V8.5 A1 1 0 0 1 11.5 9.5 H10.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+      <rect
+        x="3.5"
+        y="6.5"
+        width="7"
+        height="6"
+        rx="1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+    </Glyph>
+  );
+}
+
 export function CloseGlyph(props: GlyphProps) {
   return (
     <Glyph {...props}>

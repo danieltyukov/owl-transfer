@@ -80,3 +80,21 @@ test('the dark theme reaches every ground, not only the page', async ({ page }) 
 
   await shot(page, 'dark');
 });
+
+test('the desktop chrome draws its own title bar and follows the window', async ({ page }) => {
+  // `?frame` hands the mock a window frame with no window behind it, which is
+  // the only way to look at the chrome before the Tauri shell exists.
+  test.skip(phone(), 'the phone activity has chrome of its own');
+  await page.goto('/?frame');
+
+  const bar = page.getByRole('banner');
+  await expect(bar).toContainText('Owl Transfer');
+  await expect(bar).toContainText('Files');
+
+  const controls = page.getByRole('group', { name: 'Window' });
+  await expect(controls.getByRole('button', { name: 'Maximize' })).toBeVisible();
+  await controls.getByRole('button', { name: 'Maximize' }).click();
+  await expect(controls.getByRole('button', { name: 'Restore' })).toBeVisible();
+
+  await shot(page, 'framed');
+});

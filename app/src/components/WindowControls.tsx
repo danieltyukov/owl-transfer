@@ -1,7 +1,7 @@
-import type { MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 
 import type { WindowFrame } from '../backend/types.js';
-import { CloseGlyph, MaximizeGlyph, MinimizeGlyph } from '../icons/glyphs.js';
+import { CloseGlyph, MaximizeGlyph, MinimizeGlyph, RestoreGlyph } from '../icons/glyphs.js';
 import './WindowControls.css';
 
 /*
@@ -23,6 +23,31 @@ export interface WindowControlsProps {
 }
 
 export function WindowControls({ frame }: WindowControlsProps) {
+  const [maximized, setMaximized] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    let heard = false;
+
+    // Subscribed before asked, so a change that lands between the two is not
+    // lost. The answer to the question only applies if nothing newer arrived.
+    const off = frame.onMaximizedChange(next => {
+      heard = true;
+      if (live) setMaximized(next);
+    });
+    void frame.isMaximized().then(
+      now => {
+        if (live && !heard) setMaximized(now);
+      },
+      () => undefined,
+    );
+
+    return () => {
+      live = false;
+      off();
+    };
+  }, [frame]);
+
   return (
     <div className="window-controls" role="group" aria-label="Window">
       <button
@@ -34,17 +59,17 @@ export function WindowControls({ frame }: WindowControlsProps) {
         <MinimizeGlyph />
       </button>
       {/*
-        One label for both directions. The frame is a toggle and cannot say
-        which way it is pointing, so naming it "Maximize" would tell a screen
+        The label follows the window rather than the button. It is a toggle, so
+        calling it "Maximize" while the window already is would tell a screen
         reader the wrong thing in half of all windows.
       */}
       <button
         type="button"
         className="window-control"
-        aria-label="Maximize or restore"
+        aria-label={maximized ? 'Restore' : 'Maximize'}
         onClick={() => void frame.toggleMaximize()}
       >
-        <MaximizeGlyph />
+        {maximized ? <RestoreGlyph /> : <MaximizeGlyph />}
       </button>
       <button
         type="button"

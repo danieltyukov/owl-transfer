@@ -41,6 +41,55 @@ export interface MockSeed {
   entries?: DirEntry[];
 }
 
+export interface MockFrame extends WindowFrame {
+  /** Maximise or restore the window the way a window manager would. */
+  setMaximized(maximized: boolean): void;
+  readonly maximized: boolean;
+}
+
+/*
+ * A window frame with no window behind it.
+ *
+ * It keeps the one piece of state the real frame has, so the controls can be
+ * developed and tested without a shell: `toggleMaximize` flips it and tells
+ * whoever is watching, and `setMaximized` is the other route in, standing for
+ * the double press on the title bar and the window manager's own shortcuts.
+ */
+export function createMockFrame(maximized = false): MockFrame {
+  let state = maximized;
+  const listeners = new Set<(maximized: boolean) => void>();
+
+  const announce = (): void => {
+    for (const cb of [...listeners]) cb(state);
+  };
+
+  return {
+    get maximized() {
+      return state;
+    },
+    setMaximized(next) {
+      if (next === state) return;
+      state = next;
+      announce();
+    },
+    minimize: () => Promise.resolve(),
+    toggleMaximize() {
+      state = !state;
+      announce();
+      return Promise.resolve();
+    },
+    close: () => Promise.resolve(),
+    startDrag: () => Promise.resolve(),
+    isMaximized: () => Promise.resolve(state),
+    onMaximizedChange(cb): Unsubscribe {
+      listeners.add(cb);
+      return () => {
+        listeners.delete(cb);
+      };
+    },
+  };
+}
+
 export interface MockBackend extends Backend {
   /** Merge a patch into the state and push it, the way the engine would. */
   emitState(patch: Partial<State>): void;
