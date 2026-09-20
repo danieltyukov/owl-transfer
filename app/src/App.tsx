@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { Backend } from './backend/types.js';
 import { Devices } from './components/Devices/Devices.js';
 import { Files } from './components/Files/Files.js';
+import { useStorageAccess } from './components/PermissionCard.js';
 import { Settings } from './components/Settings/Settings.js';
 import { Sidebar } from './components/Sidebar.js';
 import { StatusStrip } from './components/StatusStrip.js';
@@ -29,6 +30,11 @@ export interface AppProps {
  * Only the open pane is mounted, and the folder the file list is showing is
  * held here rather than inside it, so moving to Devices and back comes home to
  * the same directory.
+ *
+ * Storage access is watched here for the same reason. On Android the engine
+ * starts paused, and the grant that unpauses it is made on a system screen the
+ * app never sees; watching for it from the root means it is noticed from
+ * whichever pane the person happens to be on.
  */
 const EMPTY: readonly string[] = [];
 
@@ -38,6 +44,7 @@ export function App({ backend }: AppProps) {
   const [dir, setDir] = useState('');
   const [theme, setTheme] = useTheme();
   const { toasts, push, dismiss } = useToasts(state?.errors ?? EMPTY);
+  const storage = useStorageAccess(backend, state?.paused ?? false);
 
   const frame = backend.window;
   const grab = windowGrab(frame, push);
@@ -67,6 +74,7 @@ export function App({ backend }: AppProps) {
               onDir={setDir}
               onPane={setPane}
               onError={push}
+              storage={storage}
             />
           ) : null}
           {pane === 'devices' ? (
@@ -79,6 +87,7 @@ export function App({ backend }: AppProps) {
               theme={theme}
               onTheme={setTheme}
               onError={push}
+              storage={storage}
             />
           ) : null}
         </main>

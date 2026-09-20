@@ -4,7 +4,7 @@ import type { Backend, State } from '../../backend/types.js';
 import { formatBytes, plural } from '../../format.js';
 import { ExternalGlyph } from '../../icons/glyphs.js';
 import type { Theme } from '../../theme.js';
-import { PermissionCard } from '../PermissionCard.js';
+import { PermissionCard, type StorageAccess } from '../PermissionCard.js';
 import './Settings.css';
 
 export interface SettingsProps {
@@ -13,6 +13,8 @@ export interface SettingsProps {
   theme: Theme;
   onTheme: (theme: Theme) => void;
   onError: (message: string) => void;
+  /** Watched at the root, so a grant made from any pane is noticed. */
+  storage: StorageAccess;
 }
 
 const REPOSITORY = 'https://github.com/danieltyukov/owl-transfer';
@@ -27,7 +29,7 @@ const THEMES: ReadonlyArray<readonly [Theme, string]> = [
  * What this device is called, where its folder is, how it looks, and what it
  * is. Five cards, in the order a person needs them.
  */
-export function Settings({ backend, state, theme, onTheme, onError }: SettingsProps) {
+export function Settings({ backend, state, theme, onTheme, onError, storage }: SettingsProps) {
   const [name, setName] = useState(state.device.name);
 
   // The engine is the owner of the name. If it changes underneath us, the field
@@ -85,11 +87,18 @@ export function Settings({ backend, state, theme, onTheme, onError }: SettingsPr
               {plural(state.summary.files, 'file')} and {plural(state.summary.dirs, 'folder')},{' '}
               {formatBytes(state.summary.bytes)}.
             </p>
-            <div className="settings-row">
-              <button type="button" className="button" onClick={changeFolder}>
-                Change
-              </button>
-              {backend.platform === 'desktop' ? (
+            {/*
+              Both buttons are desktop only. Android's picker hands back a tree
+              URI the engine cannot sync, so `pickFolder` answers null there and
+              the folder is fixed; a Change button that did nothing when pressed
+              was worse than no button at all. There is no file manager to
+              reveal the folder in either.
+            */}
+            {backend.platform === 'desktop' ? (
+              <div className="settings-row">
+                <button type="button" className="button" onClick={changeFolder}>
+                  Change
+                </button>
                 <button
                   type="button"
                   className="button"
@@ -99,8 +108,8 @@ export function Settings({ backend, state, theme, onTheme, onError }: SettingsPr
                 >
                   Open folder
                 </button>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="panel" aria-labelledby="settings-appearance">
@@ -122,7 +131,7 @@ export function Settings({ backend, state, theme, onTheme, onError }: SettingsPr
             </div>
           </section>
 
-          <PermissionCard backend={backend} />
+          <PermissionCard permission={storage.permission} onOpenSettings={storage.openSettings} />
 
           <section className="panel" aria-labelledby="settings-about">
             <p className="panel-title" id="settings-about">
