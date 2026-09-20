@@ -55,6 +55,18 @@ The end-to-end config starts `vite preview` against a real build rather than
 the dev server, because a bundling mistake that only appears in production is
 exactly what a shell test should catch.
 
+There is a third suite, which is not part of any of that because it opens two
+real windows: `app/e2e-desktop`, two copies of the built application on one
+machine, paired over loopback. It walks pairing and the six digit code, a file
+each way, a rename, a tree, a delete, fifty megabytes, a conflict after one
+side is killed, forgetting in both directions and reconnecting after a restart,
+asserting against the two folders on disk and against the state the engine
+publishes. It needs a desktop session, `tauri-driver`, `WebKitWebDriver` and a
+binary from `npx tauri build --debug --no-bundle`; then `./run.sh` in that
+directory runs it in about two minutes, and its README says the rest.
+`app/e2e-android` is the same idea against the emulator, and it is a run rather
+than a suite: use it when the Android side changes.
+
 `cargo check -p owl-core --target x86_64-pc-windows-gnu` runs in CI and is
 worth running locally after touching the watcher or anything that stats a file.
 The Windows code paths in `notify` and `filetime` are compiled but not executed
