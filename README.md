@@ -22,8 +22,11 @@ Project site: <https://danieltyukov.github.io/owl-transfer/>
 One ordinary directory per device: `~/OwlTransfer` on the desktop,
 `/storage/emulated/0/OwlTransfer` on the phone. Every file manager can see it,
 and you can add, rename and delete in it with whatever tool you already use.
-The app watches the folder rather than owning it, so nothing has to be imported
-and there is no format to get your files back out of.
+Open folder in the toolbar opens the directory you are looking at in that file
+manager, and Show in folder on any file opens the folder it lives in, so the
+tools you already have are never more than one press away. The app watches the
+folder rather than owning it, so nothing has to be imported and there is no
+format to get your files back out of.
 
 Each device keeps an index of that folder, one entry per path carrying a hash
 and a version vector, and a watcher that rehashes only what changed. A change
