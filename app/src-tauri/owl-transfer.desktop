@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+# The product name as a person reads it. The package, the binary and the icon
+# files stay owl-transfer so an installed copy upgrades in place.
+Name=Owl Transfer
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Categories={{categories}}
+Icon={{icon}}
+Terminal=false
+StartupNotify=true
+{{#if mime_type}}
+MimeType={{mime_type}}
+{{/if}}
+# On NVIDIA, WebKitGTK without __NV_DISABLE_EXPLICIT_SYNC=1 hands back an empty
+# frame: the window comes up blank white, with no error anywhere. If a machine
+# is still blank with it set, try WEBKIT_DISABLE_DMABUF_RENDERER=1 as well.
+Exec=env __NV_DISABLE_EXPLICIT_SYNC=1 {{exec}} {{exec_arg}}
