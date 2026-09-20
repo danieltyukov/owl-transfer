@@ -29,6 +29,52 @@ fn focus_main(app: &tauri::AppHandle) {
     }
 }
 
+/// The guard that keeps one copy of this instance running, or nothing when
+/// this process is one of several deliberately started side by side.
+///
+/// The guard is per data directory rather than per application. A copy with
+/// its own `OWL_DATA_DIR` has its own certificate, its own folder and its own
+/// port: it is a second device, which is how CONTRIBUTING says to exercise
+/// sync on one machine, and a guard keyed on the application alone makes that
+/// impossible. The second process exits inside the plugin, before it has read
+/// a single setting or written a line to the log, which looks like a crash.
+///
+/// Linux keys the guard on a D-Bus name the caller chooses, so a development
+/// instance keeps a guard of its own and launching the same one twice still
+/// comes back to its window. Windows and macOS key it on the application and
+/// offer nothing to vary, so there the guard steps aside instead.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn single_instance() -> Option<tauri::plugin::TauriPlugin<tauri::Wry>> {
+    let own_dir = std::env::var_os("OWL_DATA_DIR");
+    if own_dir.is_some() && !cfg!(target_os = "linux") {
+        return None;
+    }
+
+    let mut plugin =
+        tauri_plugin_single_instance::Builder::new().callback(|app, _argv, _cwd| focus_main(app));
+    if let Some(dir) = own_dir {
+        // Honoured on Linux, ignored everywhere else, which is why the branch
+        // above is what covers the other platforms.
+        plugin = plugin.dbus_id(instance_id(&dir));
+    }
+    Some(plugin.build())
+}
+
+/// A D-Bus name for the guard over one data directory.
+///
+/// The default hasher is not stable between Rust releases, which does not
+/// matter here: the two processes being told apart are the same binary. The
+/// name has to be a valid D-Bus well known name, so the number carries a
+/// letter in front of it: an element may not begin with a digit.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn instance_id(dir: &std::ffi::OsStr) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut hasher);
+    format!("com.owltransfer.app.i{:016x}", hasher.finish())
+}
+
 /// Logs to logcat on Android and to the terminal everywhere else.
 ///
 /// Android has no stdout worth writing to, and `android_logger` is a `log`
@@ -85,9 +131,10 @@ pub fn run() {
     // after another plugin it stops deduplicating, silently, and a second
     // launch opens a second copy watching and writing the same folder.
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        focus_main(app);
-    }));
+    let builder = match single_instance() {
+        Some(plugin) => builder.plugin(plugin),
+        None => builder,
+    };
 
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
@@ -196,4 +243,42 @@ fn start_paused(app: &tauri::AppHandle) -> bool {
 #[cfg(not(target_os = "android"))]
 fn start_paused(_app: &tauri::AppHandle) -> bool {
     false
+}
+
+#[cfg(all(test, not(any(target_os = "android", target_os = "ios"))))]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn two_data_directories_are_two_instances() {
+        assert_ne!(
+            instance_id(OsStr::new("/tmp/owl-a")),
+            instance_id(OsStr::new("/tmp/owl-b"))
+        );
+        assert_eq!(
+            instance_id(OsStr::new("/tmp/owl-a")),
+            instance_id(OsStr::new("/tmp/owl-a"))
+        );
+    }
+
+    #[test]
+    fn the_name_is_one_dbus_accepts() {
+        let id = instance_id(OsStr::new("/tmp/owl-a"));
+        let elements: Vec<&str> = id.split('.').collect();
+        assert!(elements.len() >= 2, "{id} is not a well known name");
+        for element in elements {
+            assert!(!element.is_empty(), "{id} has an empty element");
+            assert!(
+                !element.starts_with(|c: char| c.is_ascii_digit()),
+                "{id} has an element starting with a digit"
+            );
+            assert!(
+                element
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+                "{id} has an element with a character D-Bus does not allow"
+            );
+        }
+    }
 }
