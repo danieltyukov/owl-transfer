@@ -16,6 +16,12 @@ opt-level = "s"
 panic = "abort"
 strip = true
 
+# Debug info for the dependency tree (Tauri, WebKit bindings, tokio, rustls)
+# is most of a 13 GB target directory and nobody steps through it. Our own
+# crates keep full debug info; dependencies keep none.
+[profile.dev.package."*"]
+debug = false
+
 # Tests transfer tens of megabytes; an unoptimised blake3 makes them slow for
 # no reason.
 [profile.dev.package.blake3]
