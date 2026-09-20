@@ -7,22 +7,27 @@ name: Pages
 on:
   push:
     branches: [master]
-    # Everything the page is built from, including the four files it reads from
-    # outside site/. A change to the app's tokens or the bundled fonts changes
-    # how the site looks, so it has to redeploy for them too.
+    # Everything the page is built from, including what it reads from outside
+    # site/. A change to the app's tokens or the bundled fonts changes how the
+    # site looks, so it has to redeploy for those too, and the root lockfile is
+    # what pins the Vite that builds it.
     paths:
       - 'site/**'
       - 'app/src/tokens.css'
       - 'app/src/fonts/**'
       - 'app/public/favicon.svg'
       - 'docs/img/**'
+      - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
+# Read only at the workflow level. The two deploy credentials are granted to
+# the deploy job alone, because build runs `npm ci` and so executes install
+# scripts from the whole dependency tree; that step has no reason to hold a
+# token that can publish the site.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # One deploy at a time, and a queued one is not cancelled: cancelling a running
 # deploy can leave the site half-published.
@@ -33,6 +38,12 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # `pages: read` and no more. configure-pages below reads the Pages site
+    # configuration through the API and gets a 403 without it, and nothing in
+    # this job needs to write anything.
+    permissions:
+      contents: read
+      pages: read
     steps:
       - uses: actions/checkout@v7
 
@@ -58,6 +69,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
