@@ -10,7 +10,7 @@ publish = false
 
 [lib]
 name = "owl_transfer_lib"
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["lib", "cdylib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
