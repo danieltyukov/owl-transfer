@@ -57,7 +57,7 @@ describe('the settings pane', () => {
   });
 
   it('moves the folder to whatever the picker returns', async () => {
-    const { mock, user } = await show();
+    const { mock, user } = await show({ platform: 'desktop' });
     const move = vi.spyOn(mock, 'setFolder');
 
     await user.click(screen.getByRole('button', { name: 'Change' }));
@@ -72,9 +72,12 @@ describe('the settings pane', () => {
     expect(screen.getByRole('button', { name: 'Open folder' })).toBeInTheDocument();
   });
 
-  it('leaves the folder button out on a phone', async () => {
+  it('leaves both folder buttons out on a phone', async () => {
+    // Android's picker hands back a tree URI the engine cannot sync, so
+    // `pickFolder` answers null and Change did nothing when it was pressed.
     await show({ platform: 'android' });
     expect(screen.queryByRole('button', { name: 'Open folder' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Change' })).toBeNull();
   });
 
   it('puts the chosen theme on the document and remembers it', async () => {

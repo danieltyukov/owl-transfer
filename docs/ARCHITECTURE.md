@@ -37,9 +37,10 @@ The **device id** is the SHA-256 of that certificate's DER encoding, as 64
 lowercase hex characters. It is the only name that matters: it is what a peer
 pins, what the beacon advertises, what the version vectors are keyed by, and
 what the Devices screen shows the first eight characters of. A device also has
-a display name, which defaults to the hostname on the desktop and the model
-name on Android, and a kind, `desktop` or `phone`. Both are cosmetic and can
-change without breaking anything.
+a display name, which defaults to the hostname on the desktop and to "Android
+phone" on a phone, where there is no hostname worth showing anyone, and a kind,
+`desktop` or `phone`. Both are cosmetic and can change without breaking
+anything.
 
 Deleting `device.json` makes a new device. The old id is gone, every peer still
 holds the old fingerprint, and the new one has to be paired again.
@@ -88,10 +89,15 @@ Both devices contribute a random value to the code, and each one is committed
 to before the other is known. That ordering is the whole design, and the reason
 for it is in the threat model below.
 
-1. B picks a random sixteen-byte nonce and connects to A over TLS. It sends
-   `PairRequest { id, name, kind, commit }`, where `commit` is the SHA-256 of
-   that nonce and nothing else. A checks that the certificate B presented
-   hashes to the id the person picked from the nearby list or typed.
+1. B picks a random sixteen-byte nonce and connects to A over TLS. Each side
+   checks the other against the certificate presented on that connection. B
+   checks that A's certificate hashes to the id the person picked from the
+   nearby list, and drops the connection if it does not. Pair by address has no
+   id to check against, which is why the code is the whole check there. B then
+   sends `PairRequest { id, name, kind, commit }`, where `commit` is the
+   SHA-256 of that nonce and nothing else, and A refuses the request unless the
+   `id` in it is the one A's view of B's certificate hashes to. Neither side
+   can claim an id it holds no private key for.
 2. A picks its own sixteen-byte nonce and answers `PairChallenge { nonce }`.
 3. B answers `PairReveal { nonce }` with the nonce it committed to in step 1.
    A hashes it and compares against the commitment. A mismatch drops the
@@ -171,6 +177,14 @@ lexically smaller id survives. A paired peer's last known address is stored and
 retried every five seconds while it is disconnected, which is what lets a
 pair-by-address peer reconnect with no beacon at all.
 
+On Android the connection lives with the app. Android suspends the process
+within about half a minute of it going to the background, so the keepalive
+stops and the other side drops the link after its forty-five seconds of
+silence. Nothing is lost by that. The phone catches up the moment the app is
+opened again, on the first beacon or the five-second retry, and the poll
+watcher picks up whatever changed in the folder meanwhile. There is no
+foreground service in this release, and so no permanent notification either.
+
 ## The index
 
 Each device keeps one entry per path in the folder, including directories and
@@ -204,9 +218,10 @@ here. Deleting `index.json` costs a full rescan and nothing else.
 
 These names are never synced, at any depth: `.owl`, anything beginning with
 `.owl-tmp-`, `.DS_Store`, `Thumbs.db`, `desktop.ini`, anything beginning with
-`~$`, and files ending `.crdownload` or `.part`. The first two are the engine's
-own scratch files, and the rest are litter and half-written downloads that only
-ever cause pointless transfers.
+`~$`, and files ending `.crdownload` or `.part`. A `.owl-tmp-` name is a
+download in flight, `.owl` is reserved for the engine rather than written by it
+today, and the rest are litter and half-written downloads that only ever cause
+pointless transfers.
 
 ### Version vectors
 
@@ -248,16 +263,18 @@ which is long enough for a device that was switched off to come back and learn
 about the deletion, and short enough that the index does not grow without
 limit.
 
-A full rescan runs at startup, on every new connection, and every five minutes,
-so a missed event can be late but cannot be permanent.
+A full rescan runs at startup, on a new connection but at most once every half
+minute across all peers, and every five minutes, so a missed event can be late
+but cannot be permanent. The half minute is what keeps a flapping link from
+holding the scanner open.
 
 Android needs a second mechanism. Shared storage is a FUSE mount, and it does
 not reliably deliver inotify events for changes other apps make. The engine
 therefore also runs a polling watcher on a two-second interval, comparing size
-and mtime only, and rescans when the app is resumed. So "within a second" on
-the phone means within two seconds for a file another app wrote, and
-immediately for anything the app did itself, such as a file arriving through
-the share sheet.
+and mtime only. It runs with the process, so a phone that froze the app catches
+up on the first poll after Android thaws it. So "within a second" on the phone
+means within two seconds for a file another app wrote, and immediately for
+anything the app did itself, such as a file arriving through the share sheet.
 
 ## Sync
 

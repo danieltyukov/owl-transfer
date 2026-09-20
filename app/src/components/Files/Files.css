@@ -84,6 +84,13 @@ button.crumb:hover {
   flex-direction: column;
 }
 
+/* The storage card, when the folder behind the list cannot be read. It sits
+   inside the drop zone so the highlight still covers the whole body, and takes
+   the list's own side padding so its edge lines up with the rows under it. */
+.files-notice {
+  padding: 14px 14px 0;
+}
+
 @media (max-width: 899px) {
   .files-brand {
     display: block;

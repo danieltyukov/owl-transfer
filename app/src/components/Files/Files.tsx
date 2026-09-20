@@ -11,6 +11,7 @@ import { FolderPlusGlyph, PlusGlyph } from '../../icons/glyphs.js';
 import { OwlMark } from '../../icons/OwlMark.js';
 import type { Pane } from '../../panes.js';
 import { Dialog } from '../Dialog.js';
+import { PAUSED_NOTE, PermissionCard, type StorageAccess } from '../PermissionCard.js';
 import { Breadcrumb } from './Breadcrumb.js';
 import { DropZone } from './DropZone.js';
 import { EmptyState } from './EmptyState.js';
@@ -26,6 +27,8 @@ export interface FilesProps {
   onDir: (dir: string) => void;
   onPane: (pane: Pane) => void;
   onError: (message: string) => void;
+  /** Watched at the root, because the grant can arrive while any pane is open. */
+  storage: StorageAccess;
 }
 
 /** Folders first, then names the way a person reads them: "file 10" after "file 9". */
@@ -94,12 +97,21 @@ type Dialogue =
  * no local model of the tree to keep in step, which is what makes a file that
  * lands from the other device simply appear.
  */
-export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProps) {
+export function Files({ backend, state, dir, onDir, onPane, onError, storage }: FilesProps) {
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [menu, setMenu] = useState<{ entry: DirEntry; at: { x: number; y: number } } | null>(null);
   const [dialogue, setDialogue] = useState<Dialogue | null>(null);
   const [draft, setDraft] = useState('');
   const now = Date.now();
+
+  /*
+   * Nothing can be written while the engine is paused, and on Android that is
+   * how a first run starts. Every one of these calls would reach the engine and
+   * come back "permission denied", so they are refused here with the reason
+   * instead, and the card below says what to do about it.
+   */
+  const { paused } = state;
+  const blocked = paused && storage.permission === 'denied';
 
   /*
    * Whatever listing is in flight, so it can be dropped.
@@ -154,9 +166,13 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
   useEffect(
     () =>
       backend.onDrop(paths => {
+        if (paused) {
+          onError(PAUSED_NOTE);
+          return;
+        }
         void backend.importPaths(paths, dir).catch(() => onError('Those files could not be added.'));
       }),
-    [backend, dir, onError],
+    [backend, dir, onError, paused],
   );
 
   const open = (entry: DirEntry): void => {
@@ -165,6 +181,10 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
   };
 
   const addFiles = (): void => {
+    if (paused) {
+      onError(PAUSED_NOTE);
+      return;
+    }
     void backend.pickAndImport(dir).catch(() => onError('Those files could not be added.'));
   };
 
@@ -183,6 +203,10 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
     const name = draft.trim();
 
     if (pending.kind === 'new-folder') {
+      if (paused) {
+        onError(PAUSED_NOTE);
+        return;
+      }
       void backend
         .createFolder(dir === '' ? name : `${dir}/${name}`)
         .catch(() => onError(`${name} could not be created.`));
@@ -230,6 +254,19 @@ export function Files({ backend, state, dir, onDir, onPane, onError }: FilesProp
 
       <div className="pane-body">
         <DropZone backend={backend} label={here}>
+          {/*
+            On a fresh Android install this is the first thing on the first
+            screen, because the folder behind it is unreadable and the list
+            would otherwise look like an ordinary empty folder.
+          */}
+          {blocked ? (
+            <div className="files-notice">
+              <PermissionCard
+                permission={storage.permission}
+                onOpenSettings={storage.openSettings}
+              />
+            </div>
+          ) : null}
           {entries === null ? null : listing.length === 0 ? (
             <EmptyState
               root={dir === ''}

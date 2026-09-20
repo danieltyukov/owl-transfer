@@ -124,8 +124,11 @@ gives the app access to shared storage as a whole rather than to one folder,
 because Android has no permission that means "this directory". The alternatives
 were worse: the app's private directory is invisible to every other app on the
 phone, and the document picker cannot give a background service a folder it can
-watch. Sync stays paused until the permission is granted, and the app says why
-rather than asking silently.
+watch. Sync stays paused until the permission is granted, and the app says so on
+its first screen rather than failing quietly: a card explains what Android is
+withholding and opens the system screen, the status strip says sync is paused,
+and an action that would need the folder answers with the same reason instead of
+an error. The grant is picked up from whichever screen is open when it is made.
 
 The consequence runs the other way too. The sync folder is in shared storage,
 so every other app on the phone can read it. Shared storage is shared, and that

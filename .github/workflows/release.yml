@@ -292,7 +292,17 @@ jobs:
         if: always()
         run: rm -f "$RUNNER_TEMP/release.jks" app/src-tauri/gen/android/keystore.properties
 
+      # A fork with no secrets gets the unsigned APK and a warning, because a
+      # fork that could not release at all would be a fork that cannot be
+      # tested. A release from here is different: owl-transfer.apk is the stable
+      # name the site's primary button and the README both point at, and Android
+      # refuses to install an APK with no signature at all, so publishing one
+      # under that name would hand every visitor a file that cannot be opened.
+      # This is the last point at which that is still catchable.
       - name: Collect the APK and say whether it is signed
+        env:
+          UPSTREAM: danieltyukov/owl-transfer
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           outputs=app/src-tauri/gen/android/app/build/outputs/apk/universal/release
@@ -301,6 +311,10 @@ jobs:
           if [ -f "$outputs/app-universal-release.apk" ]; then
             cp "$outputs/app-universal-release.apk" "out/$APK_NAME"
           elif [ -f "$outputs/app-universal-release-unsigned.apk" ]; then
+            if [ "$REPOSITORY" = "$UPSTREAM" ]; then
+              echo "::error::The APK came out unsigned, so this release is stopped. Android refuses an APK with no signature, and $APK_NAME is the name the site and the README link to. Set ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD on $UPSTREAM, then push the tag again."
+              exit 1
+            fi
             echo "::warning::Unsigned APK. It cannot install over a signed build, and a signed build cannot install over it."
             cp "$outputs/app-universal-release-unsigned.apk" "out/$APK_NAME"
           else

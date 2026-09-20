@@ -18,12 +18,16 @@ type Tone = 'ok' | 'work' | 'idle';
  * files, because it is about the folder rather than about whatever pane is
  * open. On a phone it sits above the tabs for the same reason.
  *
+ * The paused line is the exception to "is my other device up to date": on a
+ * first run on Android the answer is that nothing is running yet, and saying so
+ * here is what keeps the person from waiting for a sync that never starts.
+ *
  * The rate is left out of what a screen reader announces. It changes several
  * times a second and adds nothing to "syncing 3 files"; the count is the part
  * that means something changed.
  */
 export function StatusStrip({ state, now = Date.now() }: StatusStripProps) {
-  const { transfers, summary, peers } = state;
+  const { transfers, summary, peers, paused } = state;
   const connected = peers.filter(p => p.connected).length;
   const active = transfers.active;
 
@@ -34,7 +38,14 @@ export function StatusStrip({ state, now = Date.now() }: StatusStripProps) {
   let text: string;
   let rate: string | null = null;
 
-  if (active.length > 0) {
+  // Paused answers the question before anything else can. A paused phone with a
+  // connected peer is never up to date, and without this the strip called that
+  // "Catching up" for as long as the permission was withheld, which is the one
+  // thing it was not doing.
+  if (paused) {
+    tone = 'idle';
+    text = 'Sync paused until storage access is allowed';
+  } else if (active.length > 0) {
     tone = 'work';
     text = `Syncing ${plural(active.length, 'file')}`;
     rate = formatRate(transfers.bytesPerSec);
