@@ -1,0 +1,138 @@
+name: CI
+
+# Standard GitHub-hosted runners throughout. Actions minutes are free and
+# unmetered on a public repository with standard runners; a larger runner bills
+# even on a public repository, so `runs-on` never names one.
+
+# Pushes to master, and every pull request. Not every branch: a push to a branch
+# that has a pull request open would run the whole workflow twice, once per
+# event, and the two runs sit in different concurrency groups because
+# `github.ref` differs, so neither cancels the other. Work on a branch is
+# covered by its pull request, and a branch with no pull request can be run from
+# the Actions tab, which is what workflow_dispatch is here for.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push to the same branch cancels the first. The last commit is the one
+# whose result anybody acts on.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # No WebKitGTK toolchain here on purpose. This job only ever builds
+      # owl-core, which has no Tauri dependency and therefore no system
+      # dependency, so it starts in seconds. The shell in app/src-tauri is
+      # compiled by the release workflow, which installs the toolchain.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-gnu
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-ubuntu-latest-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-ubuntu-latest-
+
+      # The whole workspace, including app/src-tauri. Formatting needs no
+      # compilation, so this covers the shell without the toolchain above.
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy -p owl-core --all-targets -- -D warnings
+
+      # Includes crates/core/tests/two_devices.rs, which starts two engines in
+      # one process on 127.0.0.1 with the beacon disabled and moves real files
+      # between two temp directories.
+      - name: Tests
+        run: cargo test -p owl-core
+
+      # Nothing else in CI compiles the Windows halves of notify, filetime and
+      # socket2, and the Windows installers are only built on a tag. Without
+      # this, a change that breaks `ReadDirectoryChangesW` is discovered by the
+      # release build weeks later. `cargo check` does not link, so no mingw
+      # linker is needed for it.
+      - name: Check that it still compiles for Windows
+        run: cargo check -p owl-core --target x86_64-pc-windows-gnu
+
+  web:
+    name: Interface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Against the mock backend, so this needs no engine, no build step and no
+      # network. It is the state a fresh clone is in.
+      - name: Unit tests
+        run: npm test
+
+      - name: Build the app
+        run: npm run build -w app
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: app
+
+      # The end-to-end config starts `vite preview` against a real build rather
+      # than the dev server, so this covers the bundle that ships.
+      - name: Playwright
+        run: npm run test:e2e
+
+      - name: Upload the Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            app/playwright-report/
+            app/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  site:
+    name: Site build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # A job of its own because the site imports app/src/tokens.css and the
+      # screenshots in docs/img from outside its own root: moving or renaming
+      # any of them breaks the site, and a pull request should say so rather
+      # than the next deploy discovering it.
+      - run: npm run build -w site

@@ -1,0 +1,60 @@
+name: Feature request
+description: Something the app should do and does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is a small, opinionated app with a short list of non-goals: no
+        server or relay, no account, no sharing with other people, and nothing
+        leaving the devices of the person running it. Syncing across the
+        internet needs all four, so it is not going to happen here. Selective
+        sync, version history and user-editable ignore patterns are each a
+        design of their own rather than a small addition, and none is planned.
+
+        Saying so early is more useful than a slow no.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where this would apply.
+      multiple: true
+      options:
+        - All platforms
+        - Linux desktop
+        - Windows desktop
+        - Android
+        - The sync engine
+        - Pairing and discovery
+        - The project site
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >
+        What you were trying to do, and what made it awkward. Describe the
+        situation rather than the feature; the situation is the part that
+        cannot be guessed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: >
+        Including workarounds that nearly worked. If an existing feature comes
+        close and misses, say which one and by how much.
+    validations:
+      required: false

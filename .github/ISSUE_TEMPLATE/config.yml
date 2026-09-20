@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How it works
+    url: https://github.com/danieltyukov/owl-transfer/blob/master/docs/ARCHITECTURE.md
+    about: The wire protocol, the index, the merge rules and the threat model.
+  - name: Building and running it yourself
+    url: https://github.com/danieltyukov/owl-transfer/blob/master/CONTRIBUTING.md
+    about: Toolchains per platform, the test suites, and running two instances on one machine.
+  - name: Security report
+    url: https://github.com/danieltyukov/owl-transfer/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue for one.

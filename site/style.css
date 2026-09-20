@@ -1,0 +1,425 @@
+/*
+ * The project site.
+ *
+ * The one import below is the whole point of this file's existence: the
+ * palette, type scale, radii, motion and the two font subsets come from the
+ * same tokens.css the application reads, so the site cannot drift away from the
+ * thing it is a picture of. Nothing here writes a colour literal.
+ *
+ * Element defaults are the site's own rather than the app's base.css. The app's
+ * defaults are built for a full-height two-pane shell with unstyled lists; a
+ * document that scrolls and has a definition list in it wants different ones.
+ */
+
+@import '../app/src/tokens.css';
+
+/* Element defaults
+   ------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  /* Explicit, not inherited: a transparent body borrows whatever the browser
+     paints behind it, which is how a light page ends up on a dark ground. */
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+figure {
+  margin: 0;
+}
+
+/* The underline is the only thing marking a link, since the colour is
+   inherited, so it has to carry on its own. --border-strong is a hairline
+   token: 1.45:1 on the light ground, which is a line nobody can see. --muted is
+   the faintest token that still reads as a mark rather than a smudge. */
+a {
+  color: inherit;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-color: var(--accent);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-control);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--text);
+}
+
+.skip {
+  position: absolute;
+  left: 12px;
+  top: -60px;
+  z-index: 2;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  text-decoration: none;
+  transition: top var(--dur-quick) var(--ease);
+}
+
+.skip:focus {
+  top: 12px;
+}
+
+/* The measure. One column, and the screenshot is the only thing allowed wider.
+   ------------------------------------------------------------------------- */
+
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Header
+   ------------------------------------------------------------------------- */
+
+.head {
+  border-bottom: 1px solid var(--border);
+}
+
+.head-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 60px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mark {
+  color: var(--accent);
+  flex: none;
+}
+
+.wordmark {
+  font-size: calc(var(--fs-large) + 3px);
+  font-weight: 600;
+  letter-spacing: var(--ls-h2);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  margin: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-small);
+  cursor: pointer;
+  transition:
+    background var(--dur-quick) var(--ease),
+    color var(--dur-quick) var(--ease);
+}
+
+.toggle:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.toggle[aria-pressed='true'] {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* Opening block
+   ------------------------------------------------------------------------- */
+
+.lede {
+  /* Derived from the heading token rather than picked, so a change to the app's
+     scale moves this with it. */
+  font-size: calc(var(--fs-h1) * 1.15);
+  line-height: 1.35;
+  letter-spacing: var(--ls-h1);
+  max-width: 24ch;
+  margin: 56px 0 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 28px 0 0;
+}
+
+.btn {
+  display: inline-block;
+  padding: 11px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  font-weight: 500;
+  text-decoration: none;
+  transition:
+    background var(--dur-quick) var(--ease),
+    border-color var(--dur-quick) var(--ease);
+}
+
+.btn:hover {
+  background: var(--hover);
+  border-color: var(--text);
+}
+
+/* No local pair of button tokens, unlike the sibling project's site: --accent
+   and --on-accent already flip together with the theme, and both directions
+   clear 4.5:1. White on the light ochre is 4.6:1, and the dark amber is light
+   enough that its readable foreground is the page ground rather than white. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.note {
+  margin: 16px 0 0;
+  max-width: 60ch;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+/* The screenshot. Wider than the measure, and the only thing that is.
+   ------------------------------------------------------------------------- */
+
+.shot {
+  max-width: 1120px;
+  margin: 48px auto 0;
+  padding: 0 24px;
+}
+
+/* Deliberately no `display` here. The theme rules below set it per image, and
+   a `display` on `.shot img` would outrank `.shot-dark { display: none }`,
+   which is one class against one class and one type, and render both
+   screenshots at once in the light theme. */
+.shot img {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-panel);
+}
+
+/* Two independent axes, composed rather than multiplied out into four rules.
+   The size axis hides a wrapper, which hides everything in it whatever the
+   theme rules below say, so the theme axis stays the same three-path cascade
+   tokens.css uses for colour. Exactly one image is ever rendered; the other
+   three are display:none and therefore out of the accessibility tree, so their
+   alt text is never announced twice. */
+.shot-narrow {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .shot-wide {
+    display: none;
+  }
+
+  /* A phone screenshot is portrait: full width it would be taller than most
+     screens and read as a wall rather than a picture of an app. The cap and
+     the centring are on the wrapper rather than on the image, because the
+     wrapper is a div and is block-level whatever the theme rules do to the
+     images inside it. */
+  .shot-narrow {
+    display: block;
+    max-width: 360px;
+    margin: 0 auto;
+  }
+}
+
+.shot-light {
+  display: block;
+}
+
+.shot-dark {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .shot-light {
+    display: none;
+  }
+
+  :root:not([data-theme='light']) .shot-dark {
+    display: block;
+  }
+}
+
+:root[data-theme='dark'] .shot-light {
+  display: none;
+}
+
+:root[data-theme='dark'] .shot-dark {
+  display: block;
+}
+
+/* Sections
+   ------------------------------------------------------------------------- */
+
+.section {
+  margin-top: 64px;
+  padding-top: 40px;
+  border-top: 1px solid var(--border);
+}
+
+.micro {
+  font-size: var(--fs-micro);
+  letter-spacing: var(--ls-micro);
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.section h2 {
+  margin-top: 10px;
+  /* A notch above the app's largest step. The app's scale is built for a dense
+     file list; a page that is read once wants a little more separation between
+     a section heading and the sentence under it. */
+  font-size: calc(var(--fs-h1) * 1.1);
+  letter-spacing: var(--ls-h1);
+  font-weight: 600;
+  line-height: 1.25;
+  max-width: 34ch;
+  /* Stops a two-line heading leaving one word alone on the second line.
+     Ignored where it is not supported, which costs nothing. */
+  text-wrap: balance;
+}
+
+.section > p,
+.section dd {
+  font-size: var(--fs-large);
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.section > p {
+  margin-top: 20px;
+  max-width: 62ch;
+}
+
+.section > p + p {
+  margin-top: 14px;
+}
+
+/* How it works
+   ------------------------------------------------------------------------- */
+
+.points {
+  margin-top: 28px;
+}
+
+.points dt {
+  margin-top: 26px;
+  font-size: var(--fs-large);
+  font-weight: 600;
+  letter-spacing: var(--ls-h2);
+  color: var(--text);
+}
+
+.points dd {
+  margin-top: 6px;
+  max-width: 62ch;
+}
+
+/* Footer
+   ------------------------------------------------------------------------- */
+
+.foot {
+  margin-top: 72px;
+  padding: 32px 0 56px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+
+.foot p + p {
+  margin-top: 14px;
+}
+
+.fonts {
+  max-width: 68ch;
+  line-height: 1.6;
+}
+
+/* Small screens
+   ------------------------------------------------------------------------- */
+
+@media (max-width: 600px) {
+  .wrap,
+  .shot {
+    padding: 0 18px;
+  }
+
+  .lede {
+    margin-top: 36px;
+    font-size: var(--fs-h1);
+    max-width: none;
+  }
+
+  .shot {
+    margin-top: 36px;
+  }
+
+  .section {
+    margin-top: 48px;
+    padding-top: 32px;
+  }
+
+  .section h2,
+  .section > p,
+  .points dd {
+    max-width: none;
+  }
+
+  .btn {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+}
