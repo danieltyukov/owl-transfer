@@ -1,0 +1,66 @@
+name: Pages
+
+# Set Pages to build from "GitHub Actions" once, in the repository settings.
+# With the default "Deploy from a branch" the deploy step fails with a 404 that
+# does not say which setting is wrong.
+
+on:
+  push:
+    branches: [master]
+    # Everything the page is built from, including the four files it reads from
+    # outside site/. A change to the app's tokens or the bundled fonts changes
+    # how the site looks, so it has to redeploy for them too.
+    paths:
+      - 'site/**'
+      - 'app/src/tokens.css'
+      - 'app/src/fonts/**'
+      - 'app/public/favicon.svg'
+      - 'docs/img/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a queued one is not cancelled: cancelling a running
+# deploy can leave the site half-published.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/configure-pages@v6
+
+      # The whole repository, not a sparse copy of site/, because style.css
+      # imports app/src/tokens.css and index.html points at the favicon and the
+      # four screenshots. The paths filter above lists all of them for the same
+      # reason.
+      - run: npm ci
+
+      - run: npm run build -w site
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v5

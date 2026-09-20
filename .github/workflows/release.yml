@@ -1,0 +1,384 @@
+name: Release
+
+# On a v* tag: build the APK, the deb, the AppImage and the two Windows
+# installers, and attach all five to a GitHub Release on this public
+# repository.
+#
+# The release has to be on a public repository. Assets on a private one are not
+# anonymously downloadable, and the browser on a phone has no GitHub session, so
+# a private release asset is a link that cannot be followed from the device that
+# needs it.
+#
+# Standard GitHub-hosted runners throughout: Actions minutes are free and
+# unmetered on a public repository with standard runners, and a larger runner
+# bills even on a public one.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The asset names the site and the README link to. They carry no version, so
+  # `releases/latest/download/<name>` keeps working across releases; the version
+  # is the release title and the tag.
+  APK_NAME: owl-transfer.apk
+  DEB_NAME: owl-transfer_amd64.deb
+  APPIMAGE_NAME: owl-transfer_x86_64.AppImage
+  # Windows. The NSIS installer is the one to hand out: it needs no admin
+  # rights and fetches the WebView2 runtime itself if the machine lacks it.
+  # The MSI is for anyone who deploys with one.
+  EXE_NAME: OwlTransfer_x64-setup.exe
+  MSI_NAME: OwlTransfer_x64.msi
+  # Cargo puts the bundles under the workspace target directory, which is at
+  # the repository root because the workspace manifest is, not under
+  # app/src-tauri.
+  BUNDLE_DIR: target/release/bundle
+
+jobs:
+  desktop:
+    name: deb and AppImage
+    # 22.04, deliberately, and not ubuntu-latest. glibc pins forward: a binary
+    # built on 24.04 fails to start on 22.04 with a missing-symbol error, while
+    # one built here runs on both. 22.04 is the oldest image that still ships
+    # WebKitGTK 4.1, which is what makes it the right base.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # librsvg2-dev is only needed for the AppImage, and its absence is not
+      # obvious: linuxdeploy's GTK plugin exits 1 with "there is no 'libdir'
+      # variable for 'librsvg-2.0'" while the deb still builds, so the failure
+      # looks unrelated to the bundle target.
+      - name: Install the WebKitGTK toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-release-ubuntu-22.04-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-ubuntu-22.04-
+
+      - run: npm ci
+
+      # The cache above restores target/, and the bundle directory is inside
+      # it. Tauri puts the version in each filename, so without the rm the
+      # second release finds the first release's deb sitting beside the new one
+      # and the collector below, which demands exactly one match, fails the job.
+      # It would pass the first tag and fail every tag after it.
+      - name: Build the bundles
+        working-directory: app
+        run: |
+          set -euo pipefail
+          rm -rf "../$BUNDLE_DIR"
+          npx tauri build --bundles deb,appimage
+
+      - name: Collect them under stable names
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p out
+
+          take() {
+            local dest="$1"
+            shift
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+              echo "expected exactly one bundle for $dest, found $#" >&2
+              find "$BUNDLE_DIR" -maxdepth 2 -type f >&2 || true
+              exit 1
+            fi
+            cp "$1" "out/$dest"
+            echo "$1 -> $dest"
+          }
+
+          take "$DEB_NAME" "$BUNDLE_DIR"/deb/*.deb
+          take "$APPIMAGE_NAME" "$BUNDLE_DIR"/appimage/*.AppImage
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  windows:
+    name: Windows installers
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-release-windows-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-windows-
+
+      - run: npm ci
+
+      # tauri.windows.conf.json is merged on top of tauri.conf.json here, which
+      # is where the product becomes "OwlTransfer" for the installer and the
+      # Start menu, and where the bundle targets become nsis and msi.
+      - name: Build the installers
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "../$BUNDLE_DIR"
+          npx tauri build --bundles nsis,msi
+
+      - name: Collect them under stable names
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p out
+
+          take() {
+            local dest="$1"
+            shift
+            if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+              echo "expected exactly one bundle for $dest, found $#" >&2
+              find "$BUNDLE_DIR" -maxdepth 2 -type f >&2 || true
+              exit 1
+            fi
+            cp "$1" "out/$dest"
+            echo "$1 -> $dest"
+          }
+
+          take "$EXE_NAME" "$BUNDLE_DIR"/nsis/*.exe
+          take "$MSI_NAME" "$BUNDLE_DIR"/msi/*.msi
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  android:
+    name: APK
+    runs-on: ubuntu-latest
+    env:
+      # Pinned rather than whatever "latest" resolves to on the day, so a
+      # Google release cannot change what a tag produces. 27 is the oldest NDK
+      # this project builds against; moving it is a deliberate change.
+      NDK_VERSION: 27.1.12297006
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the NDK and point the build at it
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # `yes` is killed by SIGPIPE once sdkmanager stops reading, which
+          # pipefail would otherwise report as a failed step.
+          yes | "$sdkmanager" --licenses > /dev/null || true
+          "$sdkmanager" "ndk;$NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+
+      # All four Android ABIs, although only two are built below. Installing
+      # the other two costs seconds, and it means a build widened to armv7 or
+      # x86 fails on something real rather than on a missing standard library.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache the Rust build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-release-android-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-release-android-
+
+      - run: npm ci
+
+      # Base64 in, temp file out, and both files removed in an always() step
+      # below. The keystore is never in the repository, and *.jks, *.keystore
+      # and keystore.properties are gitignored so one cannot arrive by accident.
+      #
+      # Not gated on an `if:`, because the secrets context is not available in a
+      # step condition. An absent secret is handled here instead, and said out
+      # loud rather than producing an unsigned APK quietly.
+      - name: Write the signing material
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set, so this APK will be unsigned."
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          # Read by app/build.gradle.kts through rootProject.file(), so it goes
+          # beside the Gradle root rather than beside the app module.
+          {
+            printf 'storeFile=%s\n' "$RUNNER_TEMP/release.jks"
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'password=%s\n' "$KEY_PASSWORD"
+          } > app/src-tauri/gen/android/keystore.properties
+
+      # An APK, not an AAB. The Play Store takes an AAB and a phone cannot
+      # sideload one, and sideloading is the only way this app is installed.
+      # With no keystore.properties the Gradle config leaves the APK unsigned
+      # rather than failing, so a fork holding no secrets still gets a release.
+      - name: Build the release APK
+        working-directory: app
+        run: npx tauri android build --apk --target aarch64 --target x86_64
+
+      - name: Remove the signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks" app/src-tauri/gen/android/keystore.properties
+
+      - name: Collect the APK and say whether it is signed
+        run: |
+          set -euo pipefail
+          outputs=app/src-tauri/gen/android/app/build/outputs/apk/universal/release
+          mkdir -p out
+
+          if [ -f "$outputs/app-universal-release.apk" ]; then
+            cp "$outputs/app-universal-release.apk" "out/$APK_NAME"
+          elif [ -f "$outputs/app-universal-release-unsigned.apk" ]; then
+            echo "::warning::Unsigned APK. It cannot install over a signed build, and a signed build cannot install over it."
+            cp "$outputs/app-universal-release-unsigned.apk" "out/$APK_NAME"
+          else
+            echo "no APK in $outputs" >&2
+            ls -la "$outputs" >&2 || true
+            exit 1
+          fi
+
+          # The newest build-tools on the image, rather than a pinned version:
+          # this reports what went out and never decides whether the job passes.
+          apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --print-certs "out/$APK_NAME" \
+              || echo "::warning::apksigner could not verify this APK. Treat it as unsigned."
+          else
+            echo "::warning::apksigner is not on this image, so the signature was not checked."
+          fi
+          ls -la out
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: out/
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    needs: [desktop, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      - run: ls -la assets
+
+      # gh rather than a third-party release action: it is preinstalled, it uses
+      # this job's own token, and it is one less repository whose compromise
+      # would reach a binary somebody installs.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          cat > "$notes" <<'BODY'
+          Built by `.github/workflows/release.yml` on GitHub-hosted runners, from
+          the commit this tag points at. The build log is public.
+
+          - `owl-transfer.apk`, Android. Your browser asks once for permission to
+            install it. The app then asks for All files access, which is what
+            lets the folder live at `/storage/emulated/0/OwlTransfer`.
+          - `owl-transfer_x86_64.AppImage`, Linux. `chmod +x` and run it.
+          - `owl-transfer_amd64.deb`, Debian and Ubuntu:
+            `sudo apt install ./owl-transfer_amd64.deb`
+          - `OwlTransfer_x64-setup.exe`, Windows. Installs for the current user
+            with no admin prompt. The installer is not code-signed, so
+            SmartScreen asks once: More info, then Run anyway.
+            `OwlTransfer_x64.msi` is the same build for anyone who deploys with
+            MSI.
+
+          The desktop builds are made on Ubuntu 22.04, so they run on older
+          systems as well as newer ones.
+          BODY
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$notes" \
+            --generate-notes \
+            --verify-tag \
+            "assets/$APK_NAME" \
+            "assets/$DEB_NAME" \
+            "assets/$APPIMAGE_NAME" \
+            "assets/$EXE_NAME" \
+            "assets/$MSI_NAME"
