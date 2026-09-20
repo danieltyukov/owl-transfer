@@ -1,4 +1,8 @@
-# Owl Transfer
+<p align="center">
+  <img src="app/icon-source.svg" width="128" alt="The Owl Transfer icon: an owl's face with two ringed eyes under a V brow, ink on amber.">
+</p>
+
+<h1 align="center">Owl Transfer</h1>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/desktop-dark.webp">
