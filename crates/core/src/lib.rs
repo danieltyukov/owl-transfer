@@ -4,6 +4,7 @@
 
 pub mod clock;
 pub mod config;
+pub mod conn;
 pub mod hash;
 pub mod identity;
 pub mod ignore;
@@ -11,8 +12,10 @@ pub mod index;
 pub mod pairing;
 pub mod paths;
 pub mod peers;
+pub mod proto;
 pub mod scan;
 pub mod state;
+pub mod tls;
 pub mod vv;
 pub mod watch;
 
