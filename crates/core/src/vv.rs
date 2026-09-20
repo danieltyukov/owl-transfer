@@ -48,9 +48,12 @@ pub fn merge(a: &VersionVector, b: &VersionVector) -> VersionVector {
 }
 
 /// Sets `vv[device]` to one more than the largest counter anywhere in the
-/// vector, so a device that was behind jumps ahead of everything it has seen.
-pub fn bump(vv: &mut VersionVector, device: &str) {
-    let max = vv.values().copied().max().unwrap_or(0);
+/// vector, so a device that was behind jumps ahead of everything it has
+/// seen. `floor` is the device's counter floor (see `Index::floor`): the
+/// new value is also above it, so an entry made after a folder switch or
+/// an index loss can never be dominated by what a peer still holds.
+pub fn bump(vv: &mut VersionVector, device: &str, floor: u64) {
+    let max = vv.values().copied().max().unwrap_or(0).max(floor);
     vv.insert(device.to_string(), max + 1);
 }
 
@@ -95,10 +98,22 @@ mod tests {
     #[test]
     fn bump_uses_max_plus_one() {
         let mut v = vv(&[("a", 1), ("b", 5)]);
-        bump(&mut v, "a");
+        bump(&mut v, "a", 0);
         assert_eq!(v, vv(&[("a", 6), ("b", 5)]));
         let mut empty = vv(&[]);
-        bump(&mut empty, "a");
+        bump(&mut empty, "a", 0);
         assert_eq!(empty, vv(&[("a", 1)]));
+    }
+
+    #[test]
+    fn bump_never_goes_below_the_floor() {
+        let mut v = vv(&[("a", 1), ("b", 5)]);
+        bump(&mut v, "a", 100);
+        assert_eq!(v, vv(&[("a", 101), ("b", 5)]));
+        bump(&mut v, "a", 100);
+        assert_eq!(v, vv(&[("a", 102), ("b", 5)]));
+        let mut empty = vv(&[]);
+        bump(&mut empty, "a", 7);
+        assert_eq!(empty, vv(&[("a", 8)]));
     }
 }

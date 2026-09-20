@@ -67,6 +67,9 @@ pub(crate) struct Shared {
     pub(crate) unauthenticated: AtomicUsize,
     /// Downloads a peer may have queued at once; the rest wait as deferred.
     pub(crate) queue_cap: AtomicUsize,
+    /// A pause before the hash phase of a floor scan, so tests can make a
+    /// peer reconnect in the middle of one. Zero in production.
+    pub(crate) hash_delay_ms: std::sync::atomic::AtomicU64,
     /// Temporary files between having their mtime set and being renamed
     /// into place; the stale-file sweep leaves them alone.
     pub(crate) tmp_in_flight: std::sync::Mutex<HashSet<PathBuf>>,
@@ -92,7 +95,8 @@ impl Engine {
         // makes the first exchange concurrent instead, so a differing file
         // becomes a conflict copy.
         let floor = if index_note.is_some() || (!index_existed && !peers.is_empty()) {
-            Some((now_ms() / 1000) as u64)
+            index.raise_floor((now_ms() / 1000) as u64);
+            Some(index.floor())
         } else {
             None
         };
@@ -137,6 +141,7 @@ impl Engine {
                 stopped: AtomicBool::new(false),
                 unauthenticated: AtomicUsize::new(0),
                 queue_cap: AtomicUsize::new(DEFAULT_QUEUE_CAP),
+                hash_delay_ms: std::sync::atomic::AtomicU64::new(0),
                 tmp_in_flight: std::sync::Mutex::new(HashSet::new()),
             }),
         };
@@ -188,6 +193,16 @@ impl Engine {
     #[doc(hidden)]
     pub fn set_download_queue_cap(&self, cap: usize) {
         self.shared.queue_cap.store(cap.max(1), Ordering::Relaxed);
+    }
+
+    /// Makes the next floor scans (a folder switch, a start after an index
+    /// loss) pause this long before hashing, so a test can reconnect a
+    /// peer in the middle of one. For tests.
+    #[doc(hidden)]
+    pub fn set_scan_hash_delay_for_tests(&self, delay: std::time::Duration) {
+        self.shared
+            .hash_delay_ms
+            .store(delay.as_millis() as u64, Ordering::Relaxed);
     }
 
     /// Bytes moved over the network so far, in either direction. Local

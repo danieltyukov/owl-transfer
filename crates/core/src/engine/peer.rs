@@ -492,6 +492,7 @@ async fn register_link(engine: &Engine, conn: &Connection) -> Option<(u64, Arc<R
             deferred: Vec::new(),
             pending: HashSet::new(),
             worker,
+            transfers: engine.shared().transfers.clone(),
         },
     );
     let now = now_ms();

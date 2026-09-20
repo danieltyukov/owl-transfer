@@ -59,6 +59,8 @@ pub(crate) struct PeerLink {
     /// the `Waiting` status and the queued count. Goes away with the link.
     pub pending: HashSet<String>,
     pub worker: JoinHandle<()>,
+    /// Shared so dropping the link can forget its transfers in flight.
+    pub transfers: crate::transfer::SharedTransfers,
 }
 
 impl PeerLink {
@@ -84,6 +86,12 @@ impl Drop for PeerLink {
         self.worker.abort();
         self.requester.fail_all();
         self.conn.close();
+        // The aborted worker never reaches `end_download`; without this a
+        // download it was in the middle of would show as active forever.
+        self.transfers
+            .lock()
+            .expect("transfers lock")
+            .end_all_for(&self.conn.peer_id);
     }
 }
 

@@ -38,9 +38,39 @@ impl Engine {
         self.lock().await.watcher = Some(watcher);
         self.scan_rels(&settings, vec![String::new()], floor)
             .await?;
+        if let Some(floor) = floor {
+            self.raise_all(floor).await;
+        }
         self.sweep_temp_files().await;
         self.mark_index();
         Ok(())
+    }
+
+    /// The backstop after a floor scan: any entry whose own counter is
+    /// still at or below the floor (indexed by another scan that ran
+    /// beside the floor scan) is raised and announced.
+    async fn raise_all(&self, floor: u64) {
+        let me = self.shared.identity.id.clone();
+        let mut inner = self.lock().await;
+        let raised: Vec<Entry> = inner
+            .index
+            .entries()
+            .filter(|e| e.vv.get(&me).copied().unwrap_or(0) <= floor)
+            .map(|e| {
+                let mut e = e.clone();
+                e.vv.insert(me.clone(), floor + 1);
+                e
+            })
+            .collect();
+        if raised.is_empty() {
+            return;
+        }
+        debug!("raising {} entries above the floor {floor}", raised.len());
+        for e in &raised {
+            inner.index.insert(e.clone());
+        }
+        self.broadcast_update(&inner, raised);
+        self.mark_index();
     }
 
     /// Rescans the given relative paths; `""` means everything.
@@ -79,7 +109,7 @@ impl Engine {
             }
             let now = now_ms();
             let (mut out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
-            raise_counters(&mut inner, &mut out, &me, floor);
+            raise_counters(&mut inner, &mut out, 0, &me, floor);
             for dir in &walked.unreadable {
                 if inner.unreadable.insert(dir.clone()) {
                     inner.push_error(format!(
@@ -93,6 +123,16 @@ impl Engine {
             }
             (out, to_hash)
         };
+        let raised_upto = out.changed.len();
+        if floor.is_some() {
+            let delay = self
+                .shared
+                .hash_delay_ms
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if delay > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
+        }
         let hashed = hash_files(&settings.folder, to_hash).await;
         let mut inner = self.lock().await;
         if self.settings().folder != settings.folder {
@@ -100,7 +140,7 @@ impl Engine {
         }
         let now = now_ms();
         apply_hashes(&mut inner.index, hashed, &me, now, &mut out);
-        raise_counters(&mut inner, &mut out, &me, floor);
+        raise_counters(&mut inner, &mut out, raised_upto, &me, floor);
         self.absorb_local_changes(&mut inner, out, now);
         Ok(())
     }
@@ -246,11 +286,20 @@ const TEMP_FILE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Sets every changed entry's counter to one above `floor`, under the same
 /// lock that made the entries, so no peer ever sees them lower.
-fn raise_counters(inner: &mut Inner, out: &mut ScanOutcome, me: &str, floor: Option<u64>) {
+fn raise_counters(
+    inner: &mut Inner,
+    out: &mut ScanOutcome,
+    from: usize,
+    me: &str,
+    floor: Option<u64>,
+) {
     let Some(floor) = floor else {
         return;
     };
-    for entry in out.changed.iter_mut() {
+    // Only the entries this phase produced: the walk phase's were raised
+    // already, and a vector a peer merged into one of them meanwhile
+    // must not be thrown away.
+    for entry in out.changed.iter_mut().skip(from) {
         entry.vv.clear();
         entry.vv.insert(me.to_string(), floor + 1);
         inner.index.insert(entry.clone());
@@ -481,12 +530,13 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
     // so a differing file becomes a conflict copy rather than being lost.
     let floor = {
         let mut inner = engine.lock().await;
-        let floor = inner
-            .index
-            .entries()
-            .flat_map(|e| e.vv.values().copied())
-            .max()
-            .unwrap_or(0);
+        // The floor is a property of the device from here on: every later
+        // bump lands above it, whichever scan makes it, and it is saved
+        // with the index so a restart, or a resume after a paused switch,
+        // keeps it.
+        let floor = inner.index.max_counter();
+        inner.index.raise_floor(floor);
+        let floor = inner.index.floor();
         inner.watcher = None;
         // Downloads in flight belong to the old folder; the dial loop
         // reconnects within seconds and the new index is exchanged then.

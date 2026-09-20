@@ -71,6 +71,13 @@ impl TransferState {
         self.downloads.remove(&(peer.into(), path.into()));
     }
 
+    /// Forgets every transfer with a peer, for a link that went away with
+    /// its downloads still in flight.
+    pub fn end_all_for(&mut self, peer: &str) {
+        self.downloads.retain(|(p, _), _| p != peer);
+        self.uploads.retain(|(p, _), _| p != peer);
+    }
+
     pub fn note_upload(&mut self, peer: &str, path: &str, added: u64, total: u64) {
         let key = (peer.to_string(), path.to_string());
         let up = self.uploads.entry(key).or_insert(Upload {
@@ -387,6 +394,9 @@ pub async fn local_copy(root: &Path, source_rel: &str, entry: &Entry) -> Result<
         let _ = tokio::fs::remove_file(&tmp).await;
         return Ok(None);
     }
+    // Some platforms' copies keep the source's mtime; a fresh one keeps
+    // the file out of the stale sweep while it waits to be installed.
+    let _ = crate::clock::set_mtime_ms(&tmp, crate::clock::now_ms());
     Ok(Some(tmp))
 }
 
@@ -693,5 +703,12 @@ mod tests {
         assert!(s.active.is_empty(), "finished uploads are pruned");
         assert_eq!(s.queued, 0);
         assert_eq!(t.total_bytes(), 1400);
+
+        t.begin_download("peer", "c.bin", 10);
+        t.begin_download("other", "d.bin", 10);
+        t.end_all_for("peer");
+        let s = t.summary(0);
+        assert_eq!(s.active.len(), 1);
+        assert_eq!(s.active[0].peer_id, "other");
     }
 }

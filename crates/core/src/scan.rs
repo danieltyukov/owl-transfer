@@ -279,7 +279,7 @@ pub fn apply_walk(
                 continue;
             }
             let mut vv = existing.map(|e| e.vv.clone()).unwrap_or_default();
-            bump(&mut vv, device_id);
+            bump(&mut vv, device_id, index.floor());
             record_change(
                 index,
                 Entry {
@@ -385,7 +385,7 @@ pub fn apply_hashes(
             }
         }
         let mut vv = h.expected.map(|e| e.vv).unwrap_or_default();
-        bump(&mut vv, device_id);
+        bump(&mut vv, device_id, index.floor());
         record_change(
             index,
             Entry {
@@ -422,7 +422,7 @@ pub fn tombstone(
     t.hash = None;
     t.mtime_ms = now_ms;
     t.seen_at_ms = now_ms;
-    bump(&mut t.vv, device_id);
+    bump(&mut t.vv, device_id, index.floor());
     if t.kind == EntryKind::Dir {
         out.dirs_touched.insert(t.path.clone());
     }
@@ -659,6 +659,21 @@ mod tests {
         apply_hashes(&mut index, hashed, DEV, 1, &mut out);
         assert_eq!(index.get("a.txt"), Some(&installed));
         assert!(out.changed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn every_bump_lands_above_the_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), b"hello").unwrap();
+        std::fs::create_dir_all(dir.path().join("d")).unwrap();
+        let mut index = Index::default();
+        index.raise_floor(500);
+        scan_all(dir.path(), &mut index, DEV, 1).await.unwrap();
+        assert_eq!(index.get("a.txt").unwrap().vv[DEV], 501);
+        assert_eq!(index.get("d").unwrap().vv[DEV], 501);
+        std::fs::remove_file(dir.path().join("a.txt")).unwrap();
+        scan_all(dir.path(), &mut index, DEV, 2).await.unwrap();
+        assert_eq!(index.get("a.txt").unwrap().vv[DEV], 502);
     }
 
     #[tokio::test]

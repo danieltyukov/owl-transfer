@@ -806,16 +806,21 @@ async fn damaged_index_yields_a_conflict_copy_not_a_silent_replace() {
     let mut b = start("Beta").await;
     pair(&a, &b).await;
 
-    a.write("doc.txt", b"v1");
-    assert!(wait_for_bytes(&b, "doc.txt", b"v1", WAIT).await);
+    // Beta authors the file and alpha edits it, so alpha's vector for it
+    // carries a beta counter: {beta: 1, alpha: 2}. Without the floor,
+    // beta's fresh entry after the index loss would be {beta: 1}, which
+    // that vector dominates, and alpha's copy would replace beta's edit
+    // silently. This is the case the earlier test missed: it had alpha
+    // author the file, so the fresh entry was concurrent regardless.
+    b.write("doc.txt", b"beta original");
+    assert!(wait_for_bytes(&a, "doc.txt", b"beta original", WAIT).await);
+    a.write("doc.txt", b"alpha edit");
+    assert!(wait_for_bytes(&b, "doc.txt", b"alpha edit", WAIT).await);
     b.engine.shutdown().await;
     assert!(wait_until(|| !connected_to(&a.engine, &b.id()), WAIT).await);
 
-    // Beta's index is damaged while both sides edit the same file.
     std::fs::write(b.data.path().join("index.json"), b"{broken").unwrap();
-    a.write("doc.txt", b"Alpha edit");
-    assert!(wait_until(|| a.engine.state().summary.bytes == 10, WAIT).await);
-    b.write("doc.txt", b"Beta edit, newer");
+    b.write("doc.txt", b"beta edit after the loss");
     let newer = mtime_ms(&a.path("doc.txt")) + 5000;
     owl_core::clock::set_mtime_ms(&b.path("doc.txt"), newer).unwrap();
 
@@ -834,15 +839,13 @@ async fn damaged_index_yields_a_conflict_copy_not_a_silent_replace() {
         .await
     );
 
-    // Without the old counters beta's entry would be dominated and alpha's
-    // copy would replace it silently; the floor makes it a conflict.
     let settled = |d: &Device| {
         let files = d.files();
         files.len() == 2
-            && d.read("doc.txt").as_deref() == Some(b"Beta edit, newer".as_slice())
+            && d.read("doc.txt").as_deref() == Some(b"beta edit after the loss".as_slice())
             && files.iter().any(|f| {
                 f.starts_with("doc (conflict from Alpha ")
-                    && d.read(f).as_deref() == Some(b"Alpha edit".as_slice())
+                    && d.read(f).as_deref() == Some(b"alpha edit".as_slice())
             })
     };
     assert!(
@@ -851,9 +854,141 @@ async fn damaged_index_yields_a_conflict_copy_not_a_silent_replace() {
         a.files(),
         b.files()
     );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(settled(&a) && settled(&b));
 
     a.engine.shutdown().await;
     b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconnect_during_a_folder_switch_yields_a_conflict_copy() {
+    let a = start("Alpha").await;
+    let b = start("Beta").await;
+    pair(&a, &b).await;
+
+    // Both hold d/doc.txt as {beta: 1, alpha: 2}.
+    b.engine.create_folder("d").await.unwrap();
+    b.write("d/doc.txt", b"beta original");
+    assert!(wait_for_bytes(&a, "d/doc.txt", b"beta original", WAIT).await);
+    a.write("d/doc.txt", b"alpha edit");
+    assert!(wait_for_bytes(&b, "d/doc.txt", b"alpha edit", WAIT).await);
+
+    // Beta switches to a folder holding a different d/doc.txt. The switch
+    // pauses before hashing so alpha reconnects in the middle of it; the
+    // engine's own handling of alpha's index then rescans d/doc.txt with
+    // an ordinary scan. Every bump honours the device's floor, so that
+    // entry is concurrent with alpha's rather than dominated by it.
+    let new_folder = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(new_folder.path().join("d")).unwrap();
+    std::fs::write(new_folder.path().join("d/doc.txt"), b"beta new folder").unwrap();
+    b.engine
+        .set_scan_hash_delay_for_tests(Duration::from_secs(3));
+    let switching = {
+        let engine = b.engine.clone();
+        let path = new_folder.path().to_path_buf();
+        tokio::spawn(async move { engine.set_folder(path).await })
+    };
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    a.engine
+        .pair_with_address("127.0.0.1", b.engine.local_port())
+        .await
+        .unwrap();
+    switching.await.unwrap().unwrap();
+
+    let read = |dir: &Path, name: &str| std::fs::read(dir.join("d").join(name)).ok();
+    let names = |dir: &Path| -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir.join("d"))
+            .map(|rd| {
+                rd.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| !n.starts_with(".owl-tmp-"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    let settled = |dir: &Path| {
+        let names = names(dir);
+        names.len() == 2
+            && read(dir, "doc.txt").as_deref() == Some(b"beta new folder".as_slice())
+            && names.iter().any(|f| {
+                f.starts_with("doc (conflict from Alpha ")
+                    && read(dir, f).as_deref() == Some(b"alpha edit".as_slice())
+            })
+    };
+    assert!(
+        wait_until(
+            || settled(a.folder.path()) && settled(new_folder.path()),
+            RECONNECT_WAIT
+        )
+        .await,
+        "alpha: {:?}, beta: {:?}",
+        names(a.folder.path()),
+        names(new_folder.path())
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(settled(a.folder.path()) && settled(new_folder.path()));
+
+    a.engine.shutdown().await;
+    b.engine.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forget_peer_mid_download_clears_the_transfer() {
+    let a = start("Alpha").await;
+    let mut raw = raw_pair(&a, "Silent").await;
+    let me = raw.identity.id.clone();
+    let bytes = random_bytes(1024 * 1024);
+    raw.conn
+        .send(Frame::Control(Control::IndexUpdate {
+            entries: vec![wire_entry(
+                "slow.bin",
+                EntryKind::File,
+                Some(&blake3_hex(&bytes)),
+                bytes.len() as u64,
+                &me,
+            )],
+        }))
+        .await
+        .unwrap();
+    // The peer takes the request and never answers, so the download stays
+    // in flight.
+    assert!(matches!(
+        next_control(&mut raw, WAIT).await,
+        Some(Control::Request { .. })
+    ));
+    assert!(
+        wait_until(
+            || a.engine
+                .state()
+                .transfers
+                .active
+                .iter()
+                .any(|t| t.path == "slow.bin"),
+            Duration::from_secs(8)
+        )
+        .await
+    );
+    assert!(!a.engine.state().summary.up_to_date);
+
+    a.engine.forget_peer(&me).await.unwrap();
+    assert!(
+        wait_until(
+            || a.engine.state().transfers.active.is_empty(),
+            Duration::from_secs(2)
+        )
+        .await,
+        "{:?}",
+        a.engine.state().transfers
+    );
+    assert!(wait_until(|| a.engine.state().summary.up_to_date, WAIT).await);
+    let listing = a.engine.list_dir("").await.unwrap();
+    assert!(listing.is_empty());
+    assert!(a.files().is_empty());
+
+    a.engine.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
