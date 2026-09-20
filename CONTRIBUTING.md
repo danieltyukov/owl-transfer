@@ -184,7 +184,7 @@ messages or documentation.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push to `master`, on every pull
+`.github/workflows/ci.yml` runs on every push to `main`, on every pull
 request, and by hand from the Actions tab, in three jobs. `rust` runs
 `cargo fmt --all --check`, clippy with warnings denied, the engine tests and
 the Windows cross-check. `web` runs the typecheck, the unit tests, the app
@@ -201,7 +201,7 @@ neither cancelled the other. Push a branch with nothing open against it and
 nothing runs until you open one, or start a run yourself from the Actions tab.
 
 `.github/workflows/pages.yml` builds `site/` and deploys it to GitHub Pages on
-push to `master`. Pages must be set to "GitHub Actions" as its source, once, in
+push to `main`. Pages must be set to "GitHub Actions" as its source, once, in
 the repository settings; with the default "Deploy from a branch" the deploy
 step fails with a 404 that does not say which setting is wrong.
 
