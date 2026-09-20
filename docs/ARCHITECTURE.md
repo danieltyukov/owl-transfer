@@ -84,45 +84,62 @@ connection carries the folder in both directions once it is up.
 The two devices are in front of the same person, so the check is a number
 comparison, the same shape Bluetooth uses.
 
-1. B connects to A over TLS and sends `PairRequest { id, name, kind }`.
-2. A replies with `PairChallenge { nonce }`, sixteen random bytes as hex.
-3. Both compute the same six digits from the nonce and the two fingerprints:
+Both devices contribute a random value to the code, and each one is committed
+to before the other is known. That ordering is the whole design, and the reason
+for it is in the threat model below.
+
+1. B picks a random sixteen-byte nonce and connects to A over TLS. It sends
+   `PairRequest { id, name, kind, commit }`, where `commit` is the SHA-256 of
+   that nonce and nothing else. A checks that the certificate B presented
+   hashes to the id the person picked from the nearby list or typed.
+2. A picks its own sixteen-byte nonce and answers `PairChallenge { nonce }`.
+3. B answers `PairReveal { nonce }` with the nonce it committed to in step 1.
+   A hashes it and compares against the commitment. A mismatch drops the
+   connection with no code shown, because the only reason to reveal a different
+   nonce is to steer the code.
+4. Both sides now hold both nonces and both fingerprints, and compute the same
+   six digits:
 
    ```
-   mac  = HMAC-SHA256(key = nonce, msg = fp_acceptor_hex || fp_requester_hex)
+   mac  = HMAC-SHA256(key = nonce_A || nonce_B, msg = fp_A || fp_B)
    code = u32::from_be_bytes(mac[0..4]) % 1_000_000
    ```
 
-   shown as two groups of three, `482 913`. `fp_acceptor` is the fingerprint of
-   the side that received the request.
-4. A shows "B wants to pair. Code 482 913." and B shows the same code with
+   shown as two groups of three, `482 913`. A is the side that received the
+   request and B the side that sent it, in the nonces and the fingerprints
+   alike, so both sides order the inputs the same way.
+5. A shows "B wants to pair. Code 482 913." and B shows the same code with
    "Waiting". The person checks that they match and accepts on A.
-5. A sends `PairAccept`. Both write the other's fingerprint, name and kind into
+6. A sends `PairAccept`. Both write the other's fingerprint, name and kind into
    `peers.json`, and the connection becomes an ordinary peer connection. Sync
    starts on it immediately, with no second handshake.
 
 A rejection, or sixty seconds of silence, closes the connection.
 
-The code is what protects the one moment when neither device knows the other.
-An attacker who can intercept the connection has to terminate two separate TLS
-sessions, one to each device, and present its own certificate on both. The
-fingerprints each side sees are then different, the two codes are different,
-and the person comparing them sees it. The code is derived rather than typed,
-so there is no secret to guess and no retry to brute force: a wrong code means
-the person declines and the connection closes.
+Forgetting a peer removes it from `peers.json`, and any frame still arriving
+from it is dropped from that moment. Its next connection completes the TLS
+handshake, because an unknown certificate has to be allowed that far for
+pairing to be possible at all, and is then answered with
+`PairReject { reason: "not paired" }` and closed.
 
-Forgetting a peer removes it from `peers.json`. The next connection from it is
-refused during the handshake, because trust is evaluated on every connection
-rather than cached.
+A device that receives that reject from a peer it still has in its own list
+forgets that peer too, and says why. Forgetting is a local action on one
+device, so without this the other side would keep a dead entry and redial it
+every five seconds forever.
 
 ## Connections
 
 One TCP connection per peer, on port 52734, with TLS 1.3 over it. Both sides
 present a certificate and both sides verify: the custom verifier computes the
 SHA-256 of the presented end-entity certificate and checks it against
-`peers.json`. A certificate that is not on the list is refused unless the
-connection is a pairing attempt, in which case the handshake completes and the
-pairing exchange above is the only thing allowed to run on it.
+`peers.json`.
+
+A certificate that is not on that list still completes the handshake, because a
+device that has never paired has no other way to reach the pairing exchange.
+What it does not get is a session: such a connection is allowed exactly one
+thing, the exchange above, and every other frame on it is dropped until pairing
+succeeds. The same applies the instant a peer is forgotten, so a connection
+that was live when you pressed Forget stops being one.
 
 `rustls` with the `ring` backend, with no system trust store and no CA
 validation, because neither would mean anything here. The pinned fingerprint is
@@ -140,7 +157,7 @@ The control frames are:
 | Frame | Meaning |
 | --- | --- |
 | `Hello` | id, name, kind and protocol version, sent by both sides once |
-| `PairRequest`, `PairChallenge`, `PairAccept`, `PairReject` | the exchange above |
+| `PairRequest`, `PairChallenge`, `PairReveal`, `PairAccept`, `PairReject` | the exchange above |
 | `Index` | the sender's entire index, sent once per connection |
 | `IndexUpdate` | entries that have changed since |
 | `Request` | a byte range of one file, by path and hash |
@@ -393,20 +410,35 @@ idea, and the index is plain JSON beside them.
 **An attacker on your network who can watch and inject traffic** cannot read
 your files or write into your folder. Every connection is TLS 1.3 with both
 sides authenticated, and the certificates are pinned by fingerprint, so there
-is no certificate authority to mislead and no name to spoof. Presenting
-anything other than a certificate whose hash is in `peers.json` fails the
-handshake.
+is no certificate authority to mislead and no name to spoof. A certificate that
+is not in `peers.json` gets a connection that can do nothing but attempt to
+pair.
 
 **An attacker who is present when you pair** is the case the six-digit code
-exists for. Sitting between the two devices means holding two separate TLS
-sessions with two different certificates, which produces two different codes.
-The person comparing the two screens is the check, and it is the only moment
-where a human is load bearing.
+exists for. Sitting between the two devices means relaying: holding two
+separate TLS sessions, one to each, and presenting its own certificate on both.
+The fingerprints going into the two codes are then different, so the two
+screens disagree and the person comparing them sees it.
+
+That check only holds because neither side can choose its contribution after
+seeing the other's. A relay that could pick its nonces last would not need to
+break anything: it would wait until it held both real nonces, then search its
+own two for a pair that makes the two codes collide. Six digits is a target of
+one in a million, which is a fraction of a second of hashing, and both screens
+would show the same number while the attacker sat in the middle.
+
+Committing first is what removes that. The requester hashes its nonce and sends
+the hash before the acceptor's nonce exists, and the acceptor sends its nonce
+before the requester's is revealed. Each side is bound to a value chosen while
+the other was still unknown, so a relay cannot steer either code and is left
+with the same one in a million, once, with a person looking at both screens.
+Revealing a nonce that does not match the commitment drops the connection
+before any code is shown, so there is no second attempt to grind either.
 
 **A device you paired** can read and write everything in the folder. There is
 no partial trust and no read-only peer; pairing means exactly this. If a device
-is lost or is no longer yours, forget it, which takes effect on the next
-connection attempt rather than at some later sync.
+is lost or is no longer yours, forget it. Frames from it stop being accepted
+immediately, and its next connection is told it is not paired.
 
 **Anyone who can read the data directory** has your private key and can
 impersonate the device until the peer forgets it. They can also read

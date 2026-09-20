@@ -33,11 +33,12 @@ thrown away.
 
 The two devices trust each other because you paired them, once, with both in
 front of you. Each generates its own TLS certificate on first run and keeps the
-private key. Pairing shows the same six-digit number on both screens, and
-approving it stores the other's certificate fingerprint. From then on a
-connection is allowed only from a device on that list, and the check happens
-during the TLS handshake. Forgetting a device removes it, and the next
-connection from it is refused.
+private key. Pairing shows the same six-digit number on both screens, derived
+from the two certificates and a random value from each device, and approving it
+stores the other's certificate fingerprint. From then on only a device on that
+list gets a session. Forgetting a device takes effect at once, and the next
+connection from it is told it is not paired, which makes the other side forget
+it back rather than redial a device that will never answer.
 
 It is not a backup, and it is not a cloud drive. A file you delete on one
 device is deleted on the other, there is no copy anywhere except on the devices

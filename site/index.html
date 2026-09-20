@@ -162,8 +162,8 @@
             <dd>
               Each device generates its own certificate the first time it runs and keeps the
               private key. A paired device is a certificate fingerprint you have already approved,
-              so a connection is accepted only from a device you paired with. Anything else is
-              refused during the handshake, before it can send a byte.
+              so only a device you paired with gets a session. Anything else is allowed to ask to
+              pair and to do nothing else.
             </dd>
 
             <dt>Both devices keep the whole folder.</dt>
@@ -182,13 +182,15 @@
           <p>
             Open Devices on the phone, pick the computer from the list, and both screens show the
             same six-digit number. Check that they match and press Accept. That number is derived
-            from the two certificates and a fresh random value, so a device in the middle cannot
-            make two different handshakes show the same code.
+            from the two certificates and a random value from each device, and neither side can
+            pick its value after seeing the other's, so a device in the middle cannot work out a
+            pair of values that makes two different handshakes show the same code.
           </p>
           <p>
             After that the two remember each other and reconnect on their own whenever they are on
-            the same network. Forget a device on the Devices screen and its certificate stops being trusted,
-            so the next connection from it is refused. If the network blocks broadcasts, or you
+            the same network. Forget a device on the Devices screen and its certificate stops being
+            trusted at once, and the next connection from it is told it is not paired, so it forgets
+            you back instead of redialling. If the network blocks broadcasts, or you
             are pairing against an emulator, type the other device's address instead: one side
             dialling is enough, and the connection carries the folder in both directions.
           </p>

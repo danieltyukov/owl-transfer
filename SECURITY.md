@@ -37,6 +37,16 @@ traffic this app makes is a UDP broadcast on your own network advertising that
 it exists, and TLS connections to devices you have paired with and to a device
 you are in the middle of pairing with.
 
+On Android the app sets `allowBackup="false"`, and ships backup rules and
+data-extraction rules that exclude its files, so the data directory is left out
+of Google's cloud backup and out of a device-to-device transfer to a new phone.
+The private key in `device.json` therefore never leaves the handset it was
+generated on. The cost is that a restored or replaced phone comes up as a new
+device and has to be paired again, which is the right trade: a key that
+survives a restore is a key that has been copied through somebody else's
+infrastructure, and two phones holding the same identity would be worse than
+one pairing screen.
+
 Anyone who can read the data directory holds the private key and can act as
 that device until the peer forgets it. That is the same exposure as an SSH key
 on the same machine, and it is protected the same way: file permissions on the
@@ -51,11 +61,11 @@ covers them at rest.
 ## The pairing code
 
 The six digits are not a password and there is nothing to type. Both devices
-compute them from the two certificate fingerprints and a fresh nonce the
-accepting side generates:
+compute them from the two certificate fingerprints and a random nonce from each
+side, A being the device that received the request:
 
 ```
-mac  = HMAC-SHA256(key = nonce, msg = fp_acceptor_hex || fp_requester_hex)
+mac  = HMAC-SHA256(key = nonce_A || nonce_B, msg = fp_A || fp_B)
 code = u32::from_be_bytes(mac[0..4]) % 1_000_000
 ```
 
@@ -65,14 +75,27 @@ separate TLS session with each of them, presenting its own certificate on both,
 so the fingerprints going into the two calculations differ and the two screens
 show different numbers. The person holding both devices is the check.
 
-Because it is derived rather than chosen, there is nothing to guess: an
+The order the two nonces are fixed in is what makes that hold. The requesting
+side sends only the SHA-256 of its nonce to begin with, and reveals the nonce
+itself after the other side has already sent its own. Neither contribution can
+be chosen in the light of the other. Without that, a relay would not have to
+break anything: it would collect both real nonces, then hunt through its own
+two for a combination that makes the two codes match, which for a six-digit
+target is a fraction of a second of hashing. With it, the relay is reduced to a
+one in a million guess, made once, with somebody reading both screens. A
+revealed nonce that does not match the commitment closes the connection before
+a code is shown.
+
+Because the code is derived rather than chosen, there is nothing to guess: an
 attacker cannot try codes, only make one attempt whose number will not match.
 A declined request, or sixty seconds without an answer, closes the connection.
 
-After pairing, trust is the stored fingerprint and nothing else. Every
-connection is checked against `peers.json` during the TLS handshake, so
-forgetting a peer takes effect on its next attempt rather than at some later
-point.
+After pairing, trust is the stored fingerprint and nothing else. Forgetting a
+peer takes effect immediately: frames already arriving from it are dropped, and
+its next connection is answered with a rejection saying it is not paired rather
+than being let into a session. A device that gets that rejection from a peer it
+still lists forgets it in turn and says why, so forgetting on one device does
+not leave the other one dialling a device that will never answer.
 
 A device you paired with can read and write everything in the sync folder.
 There is no read-only peer and no partial access. That is what pairing means,
