@@ -4,12 +4,14 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use rcgen::{CertificateParams, KeyPair};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::atomic::write_atomic;
 
 const DEVICE_FILE: &str = "device.json";
 const CERT_NAME: &str = "owl-transfer";
@@ -41,10 +43,21 @@ impl Identity {
         fs::create_dir_all(data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
         let path = data_dir.join(DEVICE_FILE);
         if path.exists() {
+            // Damage here is fatal on purpose: a fresh identity would be a
+            // different device to every peer, so the person must decide.
             let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-            let file: DeviceFile = serde_json::from_slice(&raw)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            return Identity::from_pem(&file.cert_pem, &file.key_pem);
+            let parsed = serde_json::from_slice::<DeviceFile>(&raw)
+                .map_err(anyhow::Error::from)
+                .and_then(|file| Identity::from_pem(&file.cert_pem, &file.key_pem));
+            return match parsed {
+                Ok(identity) => Ok(identity),
+                Err(e) => bail!(
+                    "the device identity at {} is unreadable ({e:#}). Restore it from a \
+                     backup, or delete it to create a new identity; every paired device \
+                     will then need pairing again.",
+                    path.display()
+                ),
+            };
         }
 
         let key = KeyPair::generate_for(&rcgen::PKCS_ED25519)?;
@@ -53,7 +66,7 @@ impl Identity {
             cert_pem: cert.pem(),
             key_pem: key.serialize_pem(),
         };
-        write_private(&path, &serde_json::to_vec_pretty(&file)?)?;
+        write_atomic(&path, &serde_json::to_vec_pretty(&file)?, true)?;
         Identity::from_pem(&file.cert_pem, &file.key_pem)
     }
 
@@ -84,21 +97,6 @@ impl Identity {
     }
 }
 
-/// Writes the file through a temporary name so a crash never leaves a half
-/// written identity, and keeps it readable by the owner only where the
-/// platform has such a notion.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
-    }
-    fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +115,33 @@ mod tests {
         assert!(dir.path().join("device.json").exists());
         assert_eq!(first.cert_der, second.cert_der);
         assert_eq!(first.key_der, second.key_der);
+    }
+
+    #[test]
+    fn a_damaged_device_file_is_fatal_with_a_clear_message() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("device.json"), b"").unwrap();
+        let err = Identity::load_or_create(dir.path())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("pairing again"), "{err}");
+        assert!(
+            dir.path().join("device.json").exists(),
+            "nothing is moved or replaced"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn device_file_is_private_from_the_start() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        Identity::load_or_create(dir.path()).unwrap();
+        let mode = fs::metadata(dir.path().join("device.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

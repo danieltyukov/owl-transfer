@@ -87,6 +87,8 @@ pub(crate) struct Inner {
     pub addresses: Vec<String>,
     /// Addresses that may not ask to pair until the given time.
     pub pairing_cooldown: HashMap<IpAddr, i64>,
+    /// Directories the last scans could not read, reported once each.
+    pub unreadable: HashSet<String>,
     pub next_link_id: u64,
 }
 
@@ -108,6 +110,7 @@ impl Inner {
             tombstone_retries: HashSet::new(),
             addresses: crate::beacon::local_ipv4_addresses(),
             pairing_cooldown: HashMap::new(),
+            unreadable: HashSet::new(),
             next_link_id: 1,
         }
     }

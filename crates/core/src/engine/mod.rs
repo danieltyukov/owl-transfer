@@ -74,8 +74,8 @@ impl Engine {
         std::fs::create_dir_all(&config.folder)
             .with_context(|| format!("creating {}", config.folder.display()))?;
         let identity = Identity::load_or_create(&config.data_dir)?;
-        let peers = PeerStore::load(&config.data_dir)?;
-        let mut index = Index::load(&config.data_dir)?;
+        let (peers, peers_note) = PeerStore::load_with_note(&config.data_dir)?;
+        let (mut index, index_note) = Index::load_with_note(&config.data_dir)?;
         index.remove_tombstones_older_than(now_ms() - TOMBSTONE_TTL_MS);
 
         let listener =
@@ -120,6 +120,12 @@ impl Engine {
             }),
         };
 
+        {
+            let mut inner = engine.lock().await;
+            for note in [peers_note, index_note].into_iter().flatten() {
+                inner.push_error(note);
+            }
+        }
         if config.beacon_port != 0 {
             let beacon = Beacon::start(
                 config.beacon_port,

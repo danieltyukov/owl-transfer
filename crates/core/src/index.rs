@@ -7,7 +7,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
+use crate::atomic::write_atomic;
+use crate::clock::now_ms;
 use crate::paths::{is_under, parent_of};
 use crate::vv::VersionVector;
 
@@ -59,20 +62,42 @@ pub struct Index {
 impl Index {
     /// Loads `data_dir/index.json`; a missing file is an empty index.
     pub fn load(data_dir: &Path) -> Result<Index> {
+        Ok(Index::load_with_note(data_dir)?.0)
+    }
+
+    /// `load`, returning what happened to a damaged file (zero length after
+    /// a power loss, or otherwise unparseable) so the caller can tell the
+    /// person: it is moved aside and the index starts empty.
+    pub fn load_with_note(data_dir: &Path) -> Result<(Index, Option<String>)> {
         let path = data_dir.join(INDEX_FILE);
         if !path.exists() {
-            return Ok(Index::default());
+            return Ok((Index::default(), None));
         }
         let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let file: IndexFile =
-            serde_json::from_slice(&raw).with_context(|| format!("parsing {}", path.display()))?;
-        Ok(Index {
-            entries: file
-                .entries
-                .into_iter()
-                .map(|e| (e.path.clone(), e))
-                .collect(),
-        })
+        match serde_json::from_slice::<IndexFile>(&raw) {
+            Ok(file) => Ok((
+                Index {
+                    entries: file
+                        .entries
+                        .into_iter()
+                        .map(|e| (e.path.clone(), e))
+                        .collect(),
+                },
+                None,
+            )),
+            Err(e) => {
+                let aside = data_dir.join(format!("index.json.corrupt-{}", now_ms()));
+                fs::rename(&path, &aside)
+                    .with_context(|| format!("moving {} aside", path.display()))?;
+                let note = format!(
+                    "the index file was unreadable ({e}); it was moved to {} and the folder \
+                     will be indexed again",
+                    aside.display()
+                );
+                warn!("{note}");
+                Ok((Index::default(), Some(note)))
+            }
+        }
     }
 
     /// Deletes the persisted file, for a folder change.
@@ -141,17 +166,16 @@ impl Index {
             .find(|e| e.is_live_file() && e.hash.as_deref() == Some(hash))
     }
 
-    /// Writes `index.json.tmp` then renames it over `index.json`.
+    /// Writes a temporary file, flushes it and renames it over `index.json`.
     pub fn save(&self, data_dir: &Path) -> Result<()> {
-        let path = data_dir.join(INDEX_FILE);
-        let tmp = data_dir.join("index.json.tmp");
         let file = IndexFile {
             entries: self.entries.values().cloned().collect(),
         };
-        fs::write(&tmp, serde_json::to_vec(&file)?)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, &path).with_context(|| format!("renaming into {}", path.display()))?;
-        Ok(())
+        write_atomic(
+            &data_dir.join(INDEX_FILE),
+            &serde_json::to_vec(&file)?,
+            false,
+        )
     }
 
     /// Live files, live directories and the bytes of the live files.
@@ -204,7 +228,32 @@ mod tests {
         assert_eq!(again.get("a.txt"), index.get("a.txt"));
         assert!(again.get("gone.txt").unwrap().deleted);
         assert_eq!(again.summary(), (1, 1, 3));
-        assert!(!dir.path().join("index.json.tmp").exists());
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["index.json"]);
+    }
+
+    #[test]
+    fn a_damaged_index_is_moved_aside_and_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("index.json"), b"").unwrap();
+        let (index, note) = Index::load_with_note(dir.path()).unwrap();
+        assert!(index.is_empty());
+        assert!(note.unwrap().contains("unreadable"));
+        assert!(!dir.path().join("index.json").exists());
+        let aside: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("index.json.corrupt-"))
+            .collect();
+        assert_eq!(aside.len(), 1);
+
+        fs::write(dir.path().join("index.json"), b"{not json").unwrap();
+        let (index, note) = Index::load_with_note(dir.path()).unwrap();
+        assert!(index.is_empty());
+        assert!(note.is_some());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use tokio::io::{AsyncRead, AsyncWriteExt};
 use tracing::debug;
 use unicode_normalization::UnicodeNormalization;
 
-use super::inner::{Inner, RECENT_MS};
+use super::inner::{Inner, Settings, RECENT_MS};
 use super::Engine;
 use crate::clock::{mtime_ms, now_ms};
 use crate::ignore::is_ignored;
@@ -18,31 +18,23 @@ use crate::paths::{
     file_name_of, is_conflict_name, join_rel, parent_of, validate_name, validate_rel,
 };
 use crate::proto::{Control, Frame, INDEX_CHUNK};
-use crate::scan::{scan_all, scan_paths, ScanOutcome};
+use crate::scan::{apply_hashes, apply_walk, hash_files, walk_paths, ScanOutcome};
 use crate::state::{DirEntry, EntryStatus};
 use crate::vv::VersionVector;
 use crate::watch::Watcher;
 
 impl Engine {
-    /// Indexes the folder in full and starts watching it.
+    /// Starts watching the folder, then indexes it in full. The watcher
+    /// goes first so nothing that changes during the scan is missed.
     pub(crate) async fn start_folder(&self) -> Result<()> {
         let settings = self.settings();
-        let mut inner = self.lock().await;
-        let now = now_ms();
-        let out = scan_all(
-            &settings.folder,
-            &mut inner.index,
-            &self.shared.identity.id,
-            now,
-        )
-        .await?;
-        self.absorb_local_changes(&mut inner, out, now);
         let watcher = Watcher::start(
             settings.folder.clone(),
             self.shared.poll_watch,
             self.shared.watch_tx.clone(),
         )?;
-        inner.watcher = Some(watcher);
+        self.lock().await.watcher = Some(watcher);
+        self.scan_rels(&settings, vec![String::new()]).await?;
         self.mark_index();
         Ok(())
     }
@@ -57,22 +49,47 @@ impl Engine {
             self.error("the sync folder is missing".to_string()).await;
             return;
         }
-        let mut inner = self.lock().await;
-        let now = now_ms();
-        match scan_paths(
-            &settings.folder,
-            &mut inner.index,
-            &self.shared.identity.id,
-            &rels,
-            now,
-        )
-        .await
-        {
-            Ok(out) => self.absorb_local_changes(&mut inner, out, now),
-            Err(e) => inner.push_error(format!("scanning: {e:#}")),
+        if let Err(e) = self.scan_rels(&settings, rels).await {
+            self.error(format!("scanning: {e:#}")).await;
         }
-        drop(inner);
         self.publish_state().await;
+    }
+
+    /// The four scan phases, holding the lock only for the two that touch
+    /// the index. A folder switched underneath the scan discards it.
+    async fn scan_rels(&self, settings: &Settings, rels: Vec<String>) -> Result<()> {
+        let me = self.shared.identity.id.clone();
+        let walked = walk_paths(&settings.folder, &rels).await?;
+        let to_hash = {
+            let mut inner = self.lock().await;
+            if self.settings().folder != settings.folder {
+                return Ok(());
+            }
+            let now = now_ms();
+            let (out, to_hash) = apply_walk(&mut inner.index, &walked, &me, now);
+            for dir in &walked.unreadable {
+                if inner.unreadable.insert(dir.clone()) {
+                    inner.push_error(format!(
+                        "cannot read {dir}; its contents are left as they are"
+                    ));
+                }
+            }
+            self.absorb_local_changes(&mut inner, out, now);
+            to_hash
+        };
+        if to_hash.is_empty() {
+            return Ok(());
+        }
+        let hashed = hash_files(&settings.folder, to_hash).await;
+        let mut inner = self.lock().await;
+        if self.settings().folder != settings.folder {
+            return Ok(());
+        }
+        let now = now_ms();
+        let mut out = ScanOutcome::default();
+        apply_hashes(&mut inner.index, hashed, &me, now, &mut out);
+        self.absorb_local_changes(&mut inner, out, now);
+        Ok(())
     }
 
     /// Records a scan's outcome: remembers what changed, tells every peer
@@ -355,9 +372,13 @@ pub(crate) async fn set_folder(engine: &Engine, path: PathBuf) -> Result<()> {
             .max()
             .unwrap_or(0);
         inner.watcher = None;
+        // Downloads in flight belong to the old folder; the dial loop
+        // reconnects within seconds and the new index is exchanged then.
+        inner.conns.clear();
         inner.index.clear();
         inner.recent_changes.clear();
         inner.queued_paths.clear();
+        inner.unreadable.clear();
         Index::delete_file(&engine.shared.data_dir)?;
         floor
     };

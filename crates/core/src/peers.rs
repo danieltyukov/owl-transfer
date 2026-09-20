@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
+use crate::atomic::write_atomic;
+use crate::clock::now_ms;
 use crate::config::DeviceKind;
 
 const PEERS_FILE: &str = "peers.json";
@@ -36,18 +39,53 @@ pub struct PeerStore {
 }
 
 impl PeerStore {
-    /// Loads `data_dir/peers.json`; a missing file is an empty store.
+    /// Loads `data_dir/peers.json`; a missing file is an empty store and a
+    /// damaged one is moved aside (see `load_with_note`).
     pub fn load(data_dir: &Path) -> Result<PeerStore> {
+        Ok(PeerStore::load_with_note(data_dir)?.0)
+    }
+
+    /// `load`, returning what happened to a damaged file so the caller can
+    /// tell the person that every device needs pairing again.
+    pub fn load_with_note(data_dir: &Path) -> Result<(PeerStore, Option<String>)> {
         let path = data_dir.join(PEERS_FILE);
-        let peers = if path.exists() {
-            let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-            let file: PeersFile = serde_json::from_slice(&raw)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            file.peers.into_iter().map(|p| (p.id.clone(), p)).collect()
-        } else {
-            BTreeMap::new()
-        };
-        Ok(PeerStore { path, peers })
+        if !path.exists() {
+            return Ok((
+                PeerStore {
+                    path,
+                    peers: BTreeMap::new(),
+                },
+                None,
+            ));
+        }
+        let raw = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        match serde_json::from_slice::<PeersFile>(&raw) {
+            Ok(file) => Ok((
+                PeerStore {
+                    path,
+                    peers: file.peers.into_iter().map(|p| (p.id.clone(), p)).collect(),
+                },
+                None,
+            )),
+            Err(e) => {
+                let aside = data_dir.join(format!("peers.json.corrupt-{}", now_ms()));
+                fs::rename(&path, &aside)
+                    .with_context(|| format!("moving {} aside", path.display()))?;
+                let note = format!(
+                    "the list of paired devices was unreadable ({e}); it was moved to {} and \
+                     every device needs pairing again",
+                    aside.display()
+                );
+                warn!("{note}");
+                Ok((
+                    PeerStore {
+                        path,
+                        peers: BTreeMap::new(),
+                    },
+                    Some(note),
+                ))
+            }
+        }
     }
 
     pub fn list(&self) -> Vec<PeerRecord> {
@@ -108,12 +146,7 @@ impl PeerStore {
         let file = PeersFile {
             peers: self.peers.values().cloned().collect(),
         };
-        let tmp = self.path.with_extension("json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(&file)?)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        fs::rename(&tmp, &self.path)
-            .with_context(|| format!("renaming into {}", self.path.display()))?;
-        Ok(())
+        write_atomic(&self.path, &serde_json::to_vec_pretty(&file)?, false)
     }
 }
 
@@ -145,6 +178,16 @@ mod tests {
         assert_eq!(got.name, "Pixel");
         assert_eq!(got.last_address.as_deref(), Some("10.0.0.2:52734"));
         assert_eq!(again.list().len(), 1);
+    }
+
+    #[test]
+    fn a_damaged_store_is_moved_aside_and_starts_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("peers.json"), b"").unwrap();
+        let (store, note) = PeerStore::load_with_note(dir.path()).unwrap();
+        assert!(store.is_empty());
+        assert!(note.unwrap().contains("pairing again"));
+        assert!(!dir.path().join("peers.json").exists());
     }
 
     #[test]

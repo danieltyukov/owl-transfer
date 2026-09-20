@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use tracing::{debug, warn};
 
 use super::inner::{Inner, Settings};
@@ -12,10 +12,11 @@ use super::Engine;
 use crate::clock::{mtime_ms, now_ms, set_mtime_ms};
 use crate::hash::is_hex_hash;
 use crate::ignore::is_ignored;
-use crate::index::{Entry, EntryKind};
+use crate::index::{Entry, EntryKind, Index};
 use crate::paths::{conflict_name, parent_of, safe_abs, validate_rel};
 use crate::sync::{apply_adopt, decide, needs_bytes, resolve_conflict, Decision};
 use crate::transfer::{self, Requester};
+use crate::vv::VersionVector;
 
 /// Whether an entry from the wire is well formed: a valid relative path
 /// that is not ignored, a lowercase hex hash on live files and no hash
@@ -206,6 +207,7 @@ impl Engine {
                 inner.push_error(format!("creating {}: {e}", remote.path));
                 return;
             }
+            record_ancestors(&mut inner.index, folder, &remote.path, now);
             apply_adopt(&mut inner.index, &remote, now);
             inner.last_change_ms = Some(now);
             self.dir_changed(parent_of(&remote.path));
@@ -279,6 +281,7 @@ impl Engine {
             inner.push_error(format!("creating {}: {e}", remote.path));
             return;
         }
+        record_ancestors(&mut inner.index, folder, &remote.path, now);
         inner.recent_changes.insert(winner.path.clone(), now);
         announce.push(winner);
         self.dir_changed(parent_of(&remote.path));
@@ -310,8 +313,12 @@ impl Engine {
         if let Some(source) = source {
             match transfer::local_copy(&settings.folder, &source, &remote).await {
                 Ok(Some(tmp)) => {
-                    self.install_file(inner, peer_id, settings, remote, tmp, now)
-                        .await;
+                    if let Err(e) = self
+                        .install_file(inner, peer_id, settings, remote, tmp, now)
+                        .await
+                    {
+                        debug!("local copy not installed: {e:#}");
+                    }
                     return;
                 }
                 Ok(None) => {}
@@ -396,15 +403,22 @@ impl Engine {
                 .await?
             }
         };
+        if self.settings().folder != settings.folder {
+            // The folder was switched while the bytes were on their way.
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Ok(());
+        }
         let mut inner = self.lock().await;
         self.install_file(&mut inner, &peer_id, &settings, entry, tmp, now_ms())
-            .await;
-        Ok(())
+            .await
     }
 
     /// Puts a fetched file in place, re-checking the decision now that the
     /// bytes are here. On a conflict the local file moves aside first, so
-    /// there is never a moment where the path is missing.
+    /// there is never a moment where the path is missing. What is on disk
+    /// must still match the index entry the decision was based on: an
+    /// edit the scanner has not seen yet is never overwritten; the path is
+    /// rescanned and the error asks the caller to try again.
     pub(crate) async fn install_file(
         &self,
         inner: &mut Inner,
@@ -413,7 +427,7 @@ impl Engine {
         remote: Entry,
         tmp: PathBuf,
         now: i64,
-    ) {
+    ) -> Result<()> {
         let me = &self.shared.identity.id;
         let folder = &settings.folder;
         let dest = match safe_abs(folder, &remote.path) {
@@ -421,16 +435,47 @@ impl Engine {
             Err(e) => {
                 let _ = tokio::fs::remove_file(&tmp).await;
                 inner.push_error(format!("refusing {}: {e:#}", remote.path));
-                return;
+                return Ok(());
             }
         };
         let local = inner.index.get(&remote.path).cloned();
+        let decision = decide(local.as_ref(), &remote, me, peer_id);
+        let wants_bytes = matches!(
+            decision,
+            Decision::Adopt
+                | Decision::Conflict {
+                    winner_remote: true
+                }
+        ) && needs_bytes(local.as_ref(), &remote);
+        if wants_bytes && !disk_matches(&dest, local.as_ref()).await {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            let _ = self.shared.watch_tx.try_send(vec![remote.path.clone()]);
+            return Err(anyhow!(
+                "{} changed on disk since the last scan",
+                remote.path
+            ));
+        }
         let mut announce = Vec::new();
-        match decide(local.as_ref(), &remote, me, peer_id) {
-            Decision::Adopt if needs_bytes(local.as_ref(), &remote) => {
+        match decision {
+            Decision::Adopt if !needs_bytes(local.as_ref(), &remote) => {
+                // Same content arrived by another route meanwhile: nothing
+                // to place, but the merged vector still counts.
+                let _ = tokio::fs::remove_file(&tmp).await;
+                if local
+                    .as_ref()
+                    .is_some_and(|l| l.mtime_ms != remote.mtime_ms)
+                {
+                    let _ = set_mtime_ms(&dest, remote.mtime_ms);
+                }
+                apply_adopt(&mut inner.index, &remote, now);
+                self.mark_index();
+                return Ok(());
+            }
+            Decision::Adopt => {
+                record_ancestors(&mut inner.index, folder, &remote.path, now);
                 if let Err(e) = place(&tmp, &dest, &settings.device_name, now).await {
                     inner.push_error(format!("placing {}: {e:#}", remote.path));
-                    return;
+                    return Ok(());
                 }
                 apply_adopt(&mut inner.index, &remote, now);
             }
@@ -461,14 +506,14 @@ impl Engine {
                 }
                 if let Err(e) = place(&tmp, &dest, &settings.device_name, now).await {
                     inner.push_error(format!("placing {}: {e:#}", remote.path));
-                    return;
+                    return Ok(());
                 }
                 inner.recent_changes.insert(winner.path.clone(), now);
                 announce.push(winner);
             }
             _ => {
                 let _ = tokio::fs::remove_file(&tmp).await;
-                return;
+                return Ok(());
             }
         }
         inner.last_change_ms = Some(now);
@@ -478,11 +523,57 @@ impl Engine {
         }
         self.mark_index();
         self.mark_state();
+        Ok(())
+    }
+}
+
+/// Directories created on the way to a remote path are recorded with an
+/// empty version vector, so the watcher does not announce them as local
+/// changes and any entry a peer holds for them wins.
+fn record_ancestors(index: &mut Index, folder: &Path, path: &str, now: i64) {
+    let mut prefix = String::new();
+    for component in parent_of(path).split('/').filter(|c| !c.is_empty()) {
+        prefix = crate::paths::join_rel(&prefix, component);
+        if index.get(&prefix).is_some_and(|e| e.is_live_dir()) {
+            continue;
+        }
+        let mtime = std::fs::metadata(folder.join(&prefix))
+            .map(|md| mtime_ms(&md))
+            .unwrap_or(now);
+        index.insert(Entry {
+            path: prefix.clone(),
+            kind: EntryKind::Dir,
+            size: 0,
+            mtime_ms: mtime,
+            hash: None,
+            deleted: false,
+            vv: VersionVector::new(),
+            seen_at_ms: now,
+        });
+    }
+}
+
+/// Whether what is on disk at `dest` is what the index entry describes,
+/// so replacing it cannot destroy an edit the scanner has not seen.
+async fn disk_matches(dest: &Path, local: Option<&Entry>) -> bool {
+    match tokio::fs::symlink_metadata(dest).await {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => local.is_none_or(|l| l.deleted),
+        Err(_) => false,
+        Ok(md) => match local {
+            Some(l) if !l.deleted => match l.kind {
+                EntryKind::File => {
+                    md.is_file() && md.len() == l.size && mtime_ms(&md) == l.mtime_ms
+                }
+                EntryKind::Dir => md.is_dir(),
+            },
+            _ => false,
+        },
     }
 }
 
 /// Moves a fetched file into place. A directory in the way is moved aside
-/// under a conflict name rather than deleted; the watcher indexes it.
+/// under a conflict name rather than deleted; the watcher indexes it. The
+/// caller has already recorded and created the parent directories.
 async fn place(tmp: &Path, dest: &Path, device_name: &str, now: i64) -> Result<()> {
     if let Ok(md) = tokio::fs::symlink_metadata(dest).await {
         if md.is_dir() {
@@ -523,5 +614,64 @@ async fn delete_local(folder: &Path, local: &Entry) -> bool {
             }
             EntryKind::Dir => md.is_dir() && tokio::fs::remove_dir(&abs).await.is_ok(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clock::set_mtime_ms;
+    use std::collections::BTreeMap;
+
+    fn file_entry(path: &str, size: u64, mtime_ms: i64, deleted: bool) -> Entry {
+        Entry {
+            path: path.into(),
+            kind: EntryKind::File,
+            size,
+            mtime_ms,
+            hash: Some("h".into()),
+            deleted,
+            vv: BTreeMap::new(),
+            seen_at_ms: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn disk_matches_guards_unscanned_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("doc.txt");
+        assert!(
+            disk_matches(&dest, None).await,
+            "nothing there, nothing indexed"
+        );
+        assert!(disk_matches(&dest, Some(&file_entry("doc.txt", 0, 0, true))).await);
+        assert!(
+            !disk_matches(&dest, Some(&file_entry("doc.txt", 5, 1, false))).await,
+            "indexed but gone: the person deleted it since the scan"
+        );
+
+        std::fs::write(&dest, b"hello").unwrap();
+        set_mtime_ms(&dest, 1_700_000_000_000).unwrap();
+        let indexed = file_entry("doc.txt", 5, 1_700_000_000_000, false);
+        assert!(disk_matches(&dest, Some(&indexed)).await);
+        assert!(
+            !disk_matches(&dest, None).await,
+            "a file the index does not know is never overwritten"
+        );
+        std::fs::write(&dest, b"hello, edited").unwrap();
+        assert!(!disk_matches(&dest, Some(&indexed)).await);
+    }
+
+    #[test]
+    fn ancestors_are_recorded_with_empty_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a/b")).unwrap();
+        let mut index = Index::default();
+        record_ancestors(&mut index, dir.path(), "a/b/c.txt", 7);
+        let a = index.get("a").unwrap();
+        assert!(a.is_live_dir());
+        assert!(a.vv.is_empty());
+        assert!(index.get("a/b").unwrap().is_live_dir());
+        assert!(index.get("a/b/c.txt").is_none());
     }
 }
