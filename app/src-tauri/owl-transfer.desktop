@@ -10,6 +10,13 @@ Categories={{categories}}
 Icon={{icon}}
 Terminal=false
 StartupNotify=true
+# The window announces itself to the desktop under the binary's name, because
+# Tauri sets no GTK application id and GTK falls back to the program name.
+# GNOME pairs a window with a launcher by that class, and this file is named
+# after the product, not the binary, so the class has to be spelled out here.
+# Without it the dock shows the running window under a blank icon beside the
+# pinned owl. A test in lib.rs keeps this equal to mainBinaryName.
+StartupWMClass=owl-transfer
 {{#if mime_type}}
 MimeType={{mime_type}}
 {{/if}}

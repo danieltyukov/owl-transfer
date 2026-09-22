@@ -282,4 +282,27 @@ mod tests {
             );
         }
     }
+
+    /// GNOME pairs a window with its launcher by the window's class, which is
+    /// the binary's name here because Tauri sets no GTK application id. The
+    /// launcher file is named after the product instead, so it has to name
+    /// the class itself, or the dock shows the running window under a blank
+    /// icon beside the pinned one.
+    #[test]
+    fn the_launcher_claims_the_window_class() {
+        let template = include_str!("../owl-transfer.desktop");
+        let class = template
+            .lines()
+            .find_map(|line| line.strip_prefix("StartupWMClass="))
+            .expect("the desktop template has a StartupWMClass line");
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json parses");
+        assert_eq!(
+            class,
+            conf["mainBinaryName"]
+                .as_str()
+                .expect("mainBinaryName is set"),
+            "StartupWMClass must be the binary name"
+        );
+    }
 }
