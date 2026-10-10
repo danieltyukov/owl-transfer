@@ -681,11 +681,21 @@ async fn serve(
         });
         return;
     };
-    let failing = engine
-        .shared()
-        .fail_blocks
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-        .is_ok();
+    // Takes one from the test counter if it is above zero. A plain
+    // compare-exchange loop: `fetch_update` is deprecated from Rust 1.99 and
+    // its replacement `try_update` needs 1.95, above the workspace MSRV.
+    let fail_blocks = &engine.shared().fail_blocks;
+    let mut left = fail_blocks.load(Ordering::SeqCst);
+    let failing = loop {
+        if left == 0 {
+            break false;
+        }
+        match fail_blocks.compare_exchange_weak(left, left - 1, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => break true,
+            Err(now) => left = now,
+        }
+    };
     // A paused engine serves nothing: its folder may not even be readable.
     if failing || engine.settings().paused {
         let _ = conn
